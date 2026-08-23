@@ -1,0 +1,20 @@
+{
+  "name": "multi-ai-commander",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Human-gated multi-AI build and review control plane for GitHub pull requests.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "npm run build --silent && node --test tests/*.test.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  }
+}

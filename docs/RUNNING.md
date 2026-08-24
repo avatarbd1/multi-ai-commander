@@ -157,4 +157,9 @@ Builder/Reviewer commands, `commander run` genuinely opens a Draft PR against
 - No auto-merge, no auto-deploy.
 - No second GitHub client/auth engine -- `commander run` uses the same broker-backed
   `GitHubRestClient` and `createGitHubAppClient` as every other Commander entrypoint.
-- No LLM task planner -- the task contract is supplied by the operator as a JSON file.
+
+## Generating the task contract instead of hand-writing it
+
+A task file can also be produced from one natural-language Owner command via
+`commander plan`, and the whole thing driven from GitHub Actions with no JSON authored by
+hand -- see [`OPERATIONAL_FRONT_DOOR.md`](OPERATIONAL_FRONT_DOOR.md).

@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process';
-import type { ReviewReport } from '../commander/types.js';
+import type { ReviewReport, TaskContract } from '../commander/types.js';
 import type {
   ActiveReviewProvider,
   BuilderProvider,
   CapturedProviderOutput,
+  PlannerProvider,
 } from './provider.js';
 import type { BuilderRequest, BuilderResponse } from '../execution/managed-builder-runner.js';
 import type { IndependentReviewInput } from '../review/independent-reviewer-runner.js';
+import type { PlannerRequest } from '../planner/planner-request.js';
 
 export interface JsonCommandProviderOptions {
   executable: string;
@@ -123,6 +125,24 @@ export class JsonCommandReviewProvider implements ActiveReviewProvider<Independe
 
   public async review(input: IndependentReviewInput): Promise<CapturedProviderOutput<ReviewReport>> {
     const payload = await runJsonCommand<IndependentReviewInput, ReviewReport>(this.options, input);
+    return {
+      provider: this.name,
+      capturedAt: new Date().toISOString(),
+      payload,
+    };
+  }
+}
+
+export class JsonCommandPlannerProvider implements PlannerProvider<PlannerRequest, TaskContract> {
+  public readonly mode = 'active' as const;
+
+  public constructor(
+    public readonly name: string,
+    private readonly options: JsonCommandProviderOptions,
+  ) {}
+
+  public async plan(input: PlannerRequest): Promise<CapturedProviderOutput<TaskContract>> {
+    const payload = await runJsonCommand<PlannerRequest, TaskContract>(this.options, input);
     return {
       provider: this.name,
       capturedAt: new Date().toISOString(),

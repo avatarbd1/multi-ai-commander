@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import type { AcceptanceCriterion, RiskLevel, TaskContract, Verdict, ReviewReport } from '../commander/types.js';
-import { validateTaskContract } from '../commander/task-contract.js';
-import { resolveTargetRepository, type TargetLock } from '../orchestration/target-resolver.js';
+import type { TaskContract, Verdict, ReviewReport } from '../commander/types.js';
+import { normalizeTaskContract, validateTaskContract } from '../commander/task-contract.js';
 import type { OrchestrationState } from '../orchestration/state-machine.js';
 import {
   runManagedCommander,
@@ -121,67 +120,12 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   return { taskPath };
 }
 
-function normalizeAcceptanceCriterion(entry: unknown): AcceptanceCriterion {
-  const record = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
-  return {
-    id: typeof record.id === 'string' ? record.id : '',
-    requirement: typeof record.requirement === 'string' ? record.requirement : '',
-    evidenceRequired: Array.isArray(record.evidenceRequired)
-      ? record.evidenceRequired.filter((item): item is string => typeof item === 'string')
-      : [],
-  };
-}
-
-const RISK_LEVELS: readonly RiskLevel[] = ['low', 'medium', 'high', 'critical'];
-
-/**
- * Turns a raw parsed JSON task file into a TaskContract. `targetRepository`
- * may be a supported alias (Commander/Owner/ClinicOS) or an exact
- * `owner/repo` string -- resolved here through the same target-resolver the
- * live orchestration run uses, so this is normalization, not a second
- * source of truth about which targets are supported. Unknown/unsupported
- * targets fail closed with UNSUPPORTED_TARGET_REPOSITORY before anything
- * else runs. Missing optional fields get safe, explicit defaults; missing
- * required fields are left blank and caught uniformly by
- * validateTaskContract right after this returns.
- */
-export function normalizeTaskContract(raw: unknown): TaskContract {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error('TASK_CONTRACT_MUST_BE_A_JSON_OBJECT');
-  }
-  const record = raw as Record<string, unknown>;
-
-  if (typeof record.targetRepository !== 'string' || record.targetRepository.trim() === '') {
-    throw new Error('task.targetRepository is required');
-  }
-  let target: TargetLock;
-  try {
-    target = resolveTargetRepository(record.targetRepository);
-  } catch {
-    throw new Error(`UNSUPPORTED_TARGET_REPOSITORY: ${record.targetRepository}`);
-  }
-
-  const riskLevel: RiskLevel = RISK_LEVELS.includes(record.riskLevel as RiskLevel)
-    ? (record.riskLevel as RiskLevel)
-    : 'low';
-
-  return {
-    id: typeof record.id === 'string' ? record.id : '',
-    title: typeof record.title === 'string' ? record.title : '',
-    targetRepository: target.repository,
-    baseBranch:
-      typeof record.baseBranch === 'string' && record.baseBranch.trim() !== '' ? record.baseBranch : target.baseBranch,
-    objective: typeof record.objective === 'string' ? record.objective : '',
-    acceptanceCriteria: Array.isArray(record.acceptanceCriteria)
-      ? record.acceptanceCriteria.map((entry) => normalizeAcceptanceCriterion(entry))
-      : [],
-    constraints: Array.isArray(record.constraints)
-      ? record.constraints.filter((entry): entry is string => typeof entry === 'string')
-      : [],
-    riskLevel,
-    productionMutationAllowed: record.productionMutationAllowed === true,
-  };
-}
+// normalizeTaskContract now lives in ../commander/task-contract.js (shared
+// with the planner, which needs the exact same raw-JSON -> TaskContract
+// normalization for a planner's output as the CLI uses for a human-authored
+// task file). Re-exported here so existing imports of it from this module
+// keep working.
+export { normalizeTaskContract };
 
 function errorResult(error: unknown, exitCode: number): { exitCode: number; result: CliRunResult } {
   return {

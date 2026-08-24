@@ -6,6 +6,7 @@ const VALID_ENV = {
   COMMANDER_GH_APP_ID: '123456',
   COMMANDER_GH_INSTALLATION_ID: '99',
   COMMANDER_GH_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----',
+  COMMANDER_PLANNER_COMMAND: '/usr/bin/true',
   COMMANDER_BUILDER_COMMAND: '/usr/bin/true',
   COMMANDER_REVIEWER_COMMAND: '/usr/bin/true',
 };
@@ -23,6 +24,7 @@ const VALID_TASK = {
 
 function makeRuntimeConfig() {
   return {
+    planner: { name: 'chatgpt-planner', executable: '/usr/bin/true', args: [], env: {}, timeoutMs: 1000, maxOutputBytes: 1024 },
     builder: { name: 'claude', executable: '/usr/bin/true', args: [], env: {}, timeoutMs: 1000, maxOutputBytes: 1024 },
     reviewer: { name: 'independent-reviewer', executable: '/usr/bin/true', args: [], env: {}, timeoutMs: 1000, maxOutputBytes: 1024 },
     ci: { maxAttempts: 1, intervalMs: 0 },

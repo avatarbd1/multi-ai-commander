@@ -18,6 +18,7 @@ export interface CiPollingConfig {
 }
 
 export interface RuntimeConfig {
+  planner: ProviderCommandConfig;
   builder: ProviderCommandConfig;
   reviewer: ProviderCommandConfig;
   ci: CiPollingConfig;
@@ -76,7 +77,7 @@ function parseArgs(env: Record<string, string | undefined>, key: string): string
 
 function parseProviderCommandConfig(
   env: Record<string, string | undefined>,
-  prefix: 'BUILDER' | 'REVIEWER',
+  prefix: 'PLANNER' | 'BUILDER' | 'REVIEWER',
   defaultName: string,
   missing: string[],
 ): ProviderCommandConfig {
@@ -102,6 +103,7 @@ function parseProviderCommandConfig(
  */
 export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined> = process.env): RuntimeConfig {
   const missing: string[] = [];
+  const planner = parseProviderCommandConfig(env, 'PLANNER', 'chatgpt-planner', missing);
   const builder = parseProviderCommandConfig(env, 'BUILDER', 'claude', missing);
   const reviewer = parseProviderCommandConfig(env, 'REVIEWER', 'independent-reviewer', missing);
 
@@ -123,6 +125,12 @@ export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined>
   if (builder.name.trim().toLowerCase() === reviewer.name.trim().toLowerCase()) {
     throw new Error('COMMANDER_BUILDER_NAME and COMMANDER_REVIEWER_NAME must be different provider identities');
   }
+  if (planner.name.trim().toLowerCase() === builder.name.trim().toLowerCase()) {
+    throw new Error('COMMANDER_PLANNER_NAME and COMMANDER_BUILDER_NAME must be different provider identities');
+  }
+  if (planner.name.trim().toLowerCase() === reviewer.name.trim().toLowerCase()) {
+    throw new Error('COMMANDER_PLANNER_NAME and COMMANDER_REVIEWER_NAME must be different provider identities');
+  }
 
   const ci: CiPollingConfig = {
     maxAttempts: parsePositiveInt(env, 'COMMANDER_CI_MAX_ATTEMPTS', DEFAULT_CI_MAX_ATTEMPTS),
@@ -131,5 +139,5 @@ export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined>
 
   const repairPolicy = createRepairPolicy(parseOptionalInt(env, 'COMMANDER_MAX_REPAIR_CYCLES'));
 
-  return { builder, reviewer, ci, githubApp, repairPolicy };
+  return { planner, builder, reviewer, ci, githubApp, repairPolicy };
 }

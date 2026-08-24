@@ -1,0 +1,162 @@
+name: Commander Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: >-
+          One high-level instruction for Commander to plan, build, and take
+          to HUMAN_GATE (e.g. "Complete T2-01 staff tenant membership and
+          take it to HUMAN_GATE.").
+        required: true
+        type: string
+      target:
+        description: >-
+          Optional target repository alias. Leave on "(let planner infer)"
+          to let the planning stage read the target out of the command
+          itself.
+        required: false
+        type: choice
+        default: '(let planner infer)'
+        options:
+          - '(let planner infer)'
+          - Commander
+          - Owner
+          - ClinicOS
+
+permissions:
+  contents: read
+
+jobs:
+  commander-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Validate required runtime configuration
+        env:
+          COMMANDER_GH_APP_ID: ${{ secrets.COMMANDER_GH_APP_ID }}
+          COMMANDER_GH_INSTALLATION_ID: ${{ secrets.COMMANDER_GH_INSTALLATION_ID }}
+          COMMANDER_GH_PRIVATE_KEY: ${{ secrets.COMMANDER_GH_PRIVATE_KEY }}
+          COMMANDER_GH_VERIFY_REPOSITORY: ${{ vars.COMMANDER_GH_VERIFY_REPOSITORY }}
+          COMMANDER_PLANNER_COMMAND: ${{ vars.COMMANDER_PLANNER_COMMAND }}
+          COMMANDER_PLANNER_NAME: ${{ vars.COMMANDER_PLANNER_NAME }}
+          COMMANDER_PLANNER_ARGS: ${{ vars.COMMANDER_PLANNER_ARGS }}
+          COMMANDER_PLANNER_TIMEOUT_MS: ${{ vars.COMMANDER_PLANNER_TIMEOUT_MS }}
+          COMMANDER_PLANNER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_PLANNER_MAX_OUTPUT_BYTES }}
+          COMMANDER_BUILDER_COMMAND: ${{ vars.COMMANDER_BUILDER_COMMAND }}
+          COMMANDER_BUILDER_NAME: ${{ vars.COMMANDER_BUILDER_NAME }}
+          COMMANDER_BUILDER_ARGS: ${{ vars.COMMANDER_BUILDER_ARGS }}
+          COMMANDER_BUILDER_TIMEOUT_MS: ${{ vars.COMMANDER_BUILDER_TIMEOUT_MS }}
+          COMMANDER_BUILDER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_BUILDER_MAX_OUTPUT_BYTES }}
+          COMMANDER_REVIEWER_COMMAND: ${{ vars.COMMANDER_REVIEWER_COMMAND }}
+          COMMANDER_REVIEWER_NAME: ${{ vars.COMMANDER_REVIEWER_NAME }}
+          COMMANDER_REVIEWER_ARGS: ${{ vars.COMMANDER_REVIEWER_ARGS }}
+          COMMANDER_REVIEWER_TIMEOUT_MS: ${{ vars.COMMANDER_REVIEWER_TIMEOUT_MS }}
+          COMMANDER_REVIEWER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_REVIEWER_MAX_OUTPUT_BYTES }}
+          COMMANDER_CI_MAX_ATTEMPTS: ${{ vars.COMMANDER_CI_MAX_ATTEMPTS }}
+          COMMANDER_CI_INTERVAL_MS: ${{ vars.COMMANDER_CI_INTERVAL_MS }}
+          COMMANDER_MAX_REPAIR_CYCLES: ${{ vars.COMMANDER_MAX_REPAIR_CYCLES }}
+        run: |
+          set -eu
+          node dist/auth/setup.js
+          node scripts/validate-runtime-config.mjs
+
+      - name: Convert command to a bounded TaskContract
+        id: plan
+        env:
+          COMMANDER_COMMAND_INPUT: ${{ inputs.command }}
+          COMMANDER_TARGET_INPUT: ${{ inputs.target }}
+          COMMANDER_GH_APP_ID: ${{ secrets.COMMANDER_GH_APP_ID }}
+          COMMANDER_GH_INSTALLATION_ID: ${{ secrets.COMMANDER_GH_INSTALLATION_ID }}
+          COMMANDER_GH_PRIVATE_KEY: ${{ secrets.COMMANDER_GH_PRIVATE_KEY }}
+          COMMANDER_PLANNER_COMMAND: ${{ vars.COMMANDER_PLANNER_COMMAND }}
+          COMMANDER_PLANNER_NAME: ${{ vars.COMMANDER_PLANNER_NAME }}
+          COMMANDER_PLANNER_ARGS: ${{ vars.COMMANDER_PLANNER_ARGS }}
+          COMMANDER_PLANNER_TIMEOUT_MS: ${{ vars.COMMANDER_PLANNER_TIMEOUT_MS }}
+          COMMANDER_PLANNER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_PLANNER_MAX_OUTPUT_BYTES }}
+          COMMANDER_BUILDER_COMMAND: ${{ vars.COMMANDER_BUILDER_COMMAND }}
+          COMMANDER_BUILDER_NAME: ${{ vars.COMMANDER_BUILDER_NAME }}
+          COMMANDER_REVIEWER_COMMAND: ${{ vars.COMMANDER_REVIEWER_COMMAND }}
+          COMMANDER_REVIEWER_NAME: ${{ vars.COMMANDER_REVIEWER_NAME }}
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/commander"
+          TASK_PATH="$RUNNER_TEMP/commander/task.json"
+          PLAN_RESULT_PATH="$RUNNER_TEMP/commander/plan-result.json"
+          echo "task_path=$TASK_PATH" >> "$GITHUB_OUTPUT"
+          echo "plan_result_path=$PLAN_RESULT_PATH" >> "$GITHUB_OUTPUT"
+
+          set +e
+          if [ "$COMMANDER_TARGET_INPUT" = "(let planner infer)" ] || [ -z "$COMMANDER_TARGET_INPUT" ]; then
+            node dist/cli/main.js plan --command "$COMMANDER_COMMAND_INPUT" --out "$TASK_PATH" > "$PLAN_RESULT_PATH"
+          else
+            node dist/cli/main.js plan --command "$COMMANDER_COMMAND_INPUT" --target "$COMMANDER_TARGET_INPUT" --out "$TASK_PATH" > "$PLAN_RESULT_PATH"
+          fi
+          PLAN_EXIT_CODE=$?
+          set -e
+
+          cat "$PLAN_RESULT_PATH"
+          echo "exit_code=$PLAN_EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize planning result
+        if: always()
+        env:
+          PLAN_RESULT_PATH: ${{ steps.plan.outputs.plan_result_path }}
+        run: node scripts/write-run-summary.mjs plan "$PLAN_RESULT_PATH" "$GITHUB_STEP_SUMMARY"
+
+      - name: Run managed pipeline to HUMAN_GATE
+        id: run
+        if: steps.plan.outputs.exit_code == '0'
+        env:
+          COMMANDER_GH_APP_ID: ${{ secrets.COMMANDER_GH_APP_ID }}
+          COMMANDER_GH_INSTALLATION_ID: ${{ secrets.COMMANDER_GH_INSTALLATION_ID }}
+          COMMANDER_GH_PRIVATE_KEY: ${{ secrets.COMMANDER_GH_PRIVATE_KEY }}
+          COMMANDER_BUILDER_COMMAND: ${{ vars.COMMANDER_BUILDER_COMMAND }}
+          COMMANDER_BUILDER_NAME: ${{ vars.COMMANDER_BUILDER_NAME }}
+          COMMANDER_BUILDER_ARGS: ${{ vars.COMMANDER_BUILDER_ARGS }}
+          COMMANDER_BUILDER_TIMEOUT_MS: ${{ vars.COMMANDER_BUILDER_TIMEOUT_MS }}
+          COMMANDER_BUILDER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_BUILDER_MAX_OUTPUT_BYTES }}
+          COMMANDER_REVIEWER_COMMAND: ${{ vars.COMMANDER_REVIEWER_COMMAND }}
+          COMMANDER_REVIEWER_NAME: ${{ vars.COMMANDER_REVIEWER_NAME }}
+          COMMANDER_REVIEWER_ARGS: ${{ vars.COMMANDER_REVIEWER_ARGS }}
+          COMMANDER_REVIEWER_TIMEOUT_MS: ${{ vars.COMMANDER_REVIEWER_TIMEOUT_MS }}
+          COMMANDER_REVIEWER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_REVIEWER_MAX_OUTPUT_BYTES }}
+          COMMANDER_CI_MAX_ATTEMPTS: ${{ vars.COMMANDER_CI_MAX_ATTEMPTS }}
+          COMMANDER_CI_INTERVAL_MS: ${{ vars.COMMANDER_CI_INTERVAL_MS }}
+          COMMANDER_MAX_REPAIR_CYCLES: ${{ vars.COMMANDER_MAX_REPAIR_CYCLES }}
+          TASK_PATH: ${{ steps.plan.outputs.task_path }}
+        run: |
+          set +e
+          RUN_RESULT_PATH="$RUNNER_TEMP/commander/run-result.json"
+          node dist/cli/main.js run --task "$TASK_PATH" > "$RUN_RESULT_PATH"
+          RUN_EXIT_CODE=$?
+          set -e
+
+          cat "$RUN_RESULT_PATH"
+          echo "run_result_path=$RUN_RESULT_PATH" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$RUN_EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize managed pipeline result
+        if: steps.plan.outputs.exit_code == '0' && always()
+        env:
+          RUN_RESULT_PATH: ${{ steps.run.outputs.run_result_path }}
+        run: node scripts/write-run-summary.mjs run "$RUN_RESULT_PATH" "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail the job on a non-HUMAN_GATE outcome
+        if: steps.plan.outputs.exit_code != '0' || steps.run.outputs.exit_code != '0'
+        run: |
+          echo "Commander did not reach HUMAN_GATE. See the job summary above for the exact blocker." >&2
+          exit 1

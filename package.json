@@ -18,7 +18,8 @@
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "validate:github-auth": "npm run build --silent && node dist/auth/setup.js",
     "validate:runtime-config": "npm run build --silent && node scripts/validate-runtime-config.mjs",
-    "commander": "npm run build --silent && node dist/cli/main.js"
+    "commander": "npm run build --silent && node dist/cli/main.js",
+    "start:pilot": "node dist/pilot/free-runner-server.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

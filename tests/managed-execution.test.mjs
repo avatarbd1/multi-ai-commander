@@ -56,6 +56,89 @@ test('ManagedBuilderRunner invokes active builder and executes verification auto
   assert.equal(cleaned, true);
 });
 
+test('ManagedBuilderRunner repair continuity: workspace starts from the previous attempt\'s exact SHA, not the original base', async () => {
+  let prepareArgs;
+  const workspace = {
+    async prepare(taskId, tgt, baseSha, start) {
+      prepareArgs = { taskId, baseSha, start };
+      return { path: process.cwd(), branch: 'commander/T-managed-deadbeef' };
+    },
+    async collectChanges(_path, diffBase) {
+      assert.equal(diffBase, 'sha-1', 'changes must be collected relative to the previous attempt, not the original base');
+      return [{ path: 'src/b.ts', status: 'added', content: 'export const b = 2;' }];
+    },
+    async cleanup() {},
+  };
+  const planner = { async plan() { return [{ name: 'test', executable: process.execPath, args: ['-e', 'process.exit(0)'] }]; } };
+  const provider = {
+    name: 'builder-a',
+    mode: 'active',
+    async build(input) {
+      assert.equal(input.baseSha, 'sha-1', 'the Builder is told its workspace starts at the previous attempt\'s SHA');
+      assert.equal(input.repair.kind, 'repair');
+      return { provider: 'builder-a', capturedAt: new Date().toISOString(), payload: { summary: 'fixed b', knownLimitations: [] } };
+    },
+  };
+  const repair = {
+    kind: 'repair', attempt: 2, task, acceptanceCriteria: task.acceptanceCriteria,
+    previousBuilderSummary: 'built a', previousChangedFiles: ['src/a.ts'],
+    previousBuilderSha: 'sha-1', pullRequestNumber: 5, pullRequestHeadSha: 'sha-1',
+    failingLocalChecks: [], reviewerFindings: [{ name: 'bug:medium', detail: 'fix b' }], verdictReasons: ['NEEDS_FIX'],
+  };
+
+  const runner = new ManagedBuilderRunner(provider, workspace, planner);
+  const result = await runner.run(task, target, 'deadbeef', repair);
+
+  assert.equal(prepareArgs.baseSha, 'deadbeef', 'the deterministic branch name is still derived from the ORIGINAL locked base');
+  assert.deepEqual(prepareArgs.start, { ref: 'commander/T-managed-deadbeef', sha: 'sha-1' });
+  assert.equal(result.baseSha, 'sha-1');
+  assert.deepEqual(result.changedFiles, ['src/b.ts'], 'only the true incremental repair delta, not a reconstruction of attempt 1');
+});
+
+test('ManagedBuilderRunner repair continuity: a repair before any publish (no previous SHA) still starts from the locked base', async () => {
+  let prepareArgs;
+  const workspace = {
+    async prepare(taskId, tgt, baseSha, start) { prepareArgs = { baseSha, start }; return { path: process.cwd(), branch: 'commander/T-managed-deadbeef' }; },
+    async collectChanges(_path, diffBase) { assert.equal(diffBase, 'deadbeef'); return [{ path: 'src/a.ts', status: 'added', content: 'export const a = 1;' }]; },
+    async cleanup() {},
+  };
+  const planner = { async plan() { return [{ name: 'test', executable: process.execPath, args: ['-e', 'process.exit(0)'] }]; } };
+  const provider = { name: 'builder-a', mode: 'active', async build() { return { provider: 'builder-a', capturedAt: new Date().toISOString(), payload: { summary: 'fixed', knownLimitations: [] } }; } };
+  const repair = {
+    kind: 'repair', attempt: 2, task, acceptanceCriteria: task.acceptanceCriteria,
+    previousBuilderSummary: 'attempt 1 failed local verification', previousChangedFiles: ['src/a.ts'],
+    failingLocalChecks: [{ name: 'test', detail: 'failure (exit=1)' }], reviewerFindings: [], verdictReasons: [],
+  };
+
+  const runner = new ManagedBuilderRunner(provider, workspace, planner);
+  const result = await runner.run(task, target, 'deadbeef', repair);
+
+  assert.equal(prepareArgs.start, undefined, 'no prior publish means no prior SHA to start from');
+  assert.equal(result.baseSha, 'deadbeef');
+});
+
+test('ManagedBuilderRunner repair continuity fails closed when previousBuilderSha and pullRequestHeadSha disagree', async () => {
+  const workspace = {
+    async prepare() { throw new Error('must not be reached: the mismatch is caught before touching the workspace'); },
+    async collectChanges() { throw new Error('unreachable'); },
+    async cleanup() {},
+  };
+  const planner = { async plan() { return []; } };
+  const provider = { name: 'builder-a', mode: 'active', async build() { throw new Error('must not be reached'); } };
+  const repair = {
+    kind: 'repair', attempt: 2, task, acceptanceCriteria: task.acceptanceCriteria,
+    previousBuilderSummary: 's', previousChangedFiles: [],
+    previousBuilderSha: 'sha-1', pullRequestNumber: 5, pullRequestHeadSha: 'sha-DIFFERENT',
+    failingLocalChecks: [], reviewerFindings: [], verdictReasons: [],
+  };
+
+  const runner = new ManagedBuilderRunner(provider, workspace, planner);
+  await assert.rejects(
+    () => runner.run(task, target, 'deadbeef', repair),
+    (error) => error instanceof Error && error.message === 'REPAIR_EVIDENCE_SHA_MISMATCH',
+  );
+});
+
 test('PublicationOrchestrator publishes file changes and binds BuilderOutput to exact PR head', async () => {
   let currentSha = 'base-sha';
   const calls = [];
@@ -90,6 +173,68 @@ test('PublicationOrchestrator publishes file changes and binds BuilderOutput to 
   assert.equal(published.builder.commitSha, currentSha);
   assert.equal(published.pullRequest.draft, true);
   assert.equal(published.builder.pullRequestNumber, 8);
+});
+
+test('PublicationOrchestrator repair publish updates the SAME PR/branch with only the repair delta, leaving attempt-1 files untouched', async () => {
+  // Simulates the branch's real remote state after attempt 1 already
+  // published a.ts: it exists on the branch. The repair's own diff (item
+  // 3/6 of the fix) only concerns b.ts -- a.ts must never be written again
+  // or otherwise erased just because it isn't part of this attempt's delta.
+  let currentSha = 'sha-1';
+  const calls = [];
+  const client = {
+    async createBranch() { throw new Error('must not create a new branch on a repair'); },
+    async getFileMetadata(_repository, path) {
+      if (path === 'a.ts') return { sha: 'blob-a-from-attempt-1' };
+      return null;
+    },
+    async createOrUpdateFile(input) {
+      calls.push(input.path);
+      assert.equal(input.path, 'b.ts', 'attempt 1\'s a.ts must never be re-written by a repair that did not touch it');
+      currentSha = 'sha-2';
+      return { commitSha: currentSha };
+    },
+    async deleteFile() { throw new Error('the repair delta has no deletions'); },
+    async createPullRequest() { throw new Error('must reuse the existing PR, not create a new one'); },
+    async getPullRequest(repository, number) {
+      assert.equal(number, 5);
+      return {
+        repository, number, title: task.title, state: 'open', headSha: currentSha,
+        headBranch: 'commander/T-managed-base', baseBranch: 'main', draft: true,
+        changedFiles: ['a.ts', 'b.ts'], url: 'https://example/pr/5',
+      };
+    },
+  };
+  const repairWork = {
+    taskId: task.id, provider: 'builder-a', summary: 'fixed b', branch: 'commander/T-managed-base', baseSha: 'sha-1',
+    changedFiles: ['b.ts'],
+    changes: [{ path: 'b.ts', status: 'added', content: 'export const b = 2;' }],
+    tests: [{ name: 'test', command: 'npm test', conclusion: 'success' }], knownLimitations: [],
+  };
+  const published = await new PublicationOrchestrator(client).publish(task, target, repairWork, {
+    branch: 'commander/T-managed-base', pullRequestNumber: 5,
+  });
+  assert.deepEqual(calls, ['b.ts']);
+  assert.equal(published.builder.commitSha, 'sha-2');
+  assert.equal(published.pullRequest.number, 5);
+});
+
+test('LocalGitWorkspaceManager fails closed when the locked base SHA no longer matches the real remote branch', async () => {
+  const { LocalGitWorkspaceManager } = await import('../dist/execution/managed-builder-runner.js');
+  const manager = new LocalGitWorkspaceManager();
+  await assert.rejects(
+    () => manager.prepare('T-git-check', target, '0000000000000000000000000000000000000000'),
+    (error) => error instanceof Error && error.message === 'BASE_SHA_MOVED',
+  );
+});
+
+test('LocalGitWorkspaceManager fails closed when a repair\'s expected previous SHA does not match the real remote branch', async () => {
+  const { LocalGitWorkspaceManager } = await import('../dist/execution/managed-builder-runner.js');
+  const manager = new LocalGitWorkspaceManager();
+  await assert.rejects(
+    () => manager.prepare('T-git-check', target, 'deadbeef', { ref: 'main', sha: '0000000000000000000000000000000000000000' }),
+    (error) => error instanceof Error && error.message === 'REPAIR_START_SHA_MISMATCH',
+  );
 });
 
 test('commit-bound CI gate fails closed and passes only exact all-success evidence', () => {

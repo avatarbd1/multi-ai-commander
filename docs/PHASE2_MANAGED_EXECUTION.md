@@ -90,6 +90,21 @@ re-fetches the existing PR to confirm its head. `getFileMetadata` is always chec
 *current* head (not the task's base SHA), so a repair correctly treats a file the first attempt already
 added as "update", not "create" -- otherwise it would collide with the previous attempt's own commit.
 
+**Repair workspace continuity.** A repair's local workspace starts from the *previous attempt's exact
+published SHA* -- the current task branch's own head -- not a fresh checkout of the original locked base.
+`ManagedBuilderRunner` re-derives the task's deterministic branch name and fetches it at
+`RepairRequest.previousBuilderSha` (after first asserting that SHA equals `RepairRequest.pullRequestHeadSha`
+-- both were set from the same prior publish, so they must already agree); `LocalGitWorkspaceManager`'s own
+git-level fetch then independently confirms the *remote's actual current state* matches that expectation,
+failing closed (`REPAIR_START_SHA_MISMATCH`) rather than proceeding on a stale assumption if it doesn't. The
+Builder subprocess itself never fetches anything or needs GitHub credentials -- Commander establishes the
+exact starting tree before invoking it. Because the workspace already contains everything the previous
+attempt published, `collectChanges` against that same SHA yields the *true incremental repair delta* (only
+what actually changed this attempt), so a repair that only touches file B can never lose attempt 1's fix to
+file A -- there is nothing to reconstruct, and nothing gets silently erased. A repair that has no previous
+publish to continue from (a local-verification failure repaired before anything was ever published) falls
+back to the locked base, same as an initial attempt.
+
 **Exact-SHA freshness.** Every attempt re-establishes, independently, that Builder output SHA = remote PR
 head SHA = CI SHA = the SHA the reviewer actually inspected -- the same invariant a single-attempt run
 already enforced (`PublicationOrchestrator`'s head-match check, `IndependentReviewerRunner`'s PR/CI SHA

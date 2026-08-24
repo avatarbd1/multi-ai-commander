@@ -75,6 +75,24 @@ function parseArgs(env: Record<string, string | undefined>, key: string): string
   return parsed;
 }
 
+function providerEnvironment(
+  env: Record<string, string | undefined>,
+  prefix: 'PLANNER' | 'BUILDER' | 'REVIEWER',
+  name: string,
+): Record<string, string> {
+  const output: Record<string, string> = { COMMANDER_PROVIDER_NAME: name };
+  if (prefix === 'BUILDER') {
+    const key = env.COMMANDER_BUILDER_ANTHROPIC_API_KEY;
+    if (key) output.ANTHROPIC_API_KEY = key;
+  } else {
+    const key = env[`COMMANDER_${prefix}_OPENAI_API_KEY`];
+    if (key) output.OPENAI_API_KEY = key;
+    const model = env[`COMMANDER_${prefix}_OPENAI_MODEL`];
+    if (model) output.OPENAI_MODEL = model;
+  }
+  return output;
+}
+
 function parseProviderCommandConfig(
   env: Record<string, string | undefined>,
   prefix: 'PLANNER' | 'BUILDER' | 'REVIEWER',
@@ -88,24 +106,18 @@ function parseProviderCommandConfig(
     name,
     executable,
     args: parseArgs(env, `COMMANDER_${prefix}_ARGS`),
-    env: {},
+    env: providerEnvironment(env, prefix, name),
     timeoutMs: parsePositiveInt(env, `COMMANDER_${prefix}_TIMEOUT_MS`, DEFAULT_TIMEOUT_MS),
     maxOutputBytes: parsePositiveInt(env, `COMMANDER_${prefix}_MAX_OUTPUT_BYTES`, DEFAULT_MAX_OUTPUT_BYTES),
   };
 }
 
-/**
- * Loads Commander's managed-execution runtime configuration from the trusted
- * environment. Fails closed: any missing required value (a provider command,
- * or the GitHub App broker configuration) throws rather than silently
- * defaulting, and builder/reviewer provider identity collision is rejected
- * here so it can never reach a live run.
- */
+/** Loads Commander's runtime config and fails closed on missing commands/auth or identity collisions. */
 export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined> = process.env): RuntimeConfig {
   const missing: string[] = [];
-  const planner = parseProviderCommandConfig(env, 'PLANNER', 'chatgpt-planner', missing);
+  const planner = parseProviderCommandConfig(env, 'PLANNER', 'openai-planner', missing);
   const builder = parseProviderCommandConfig(env, 'BUILDER', 'claude', missing);
-  const reviewer = parseProviderCommandConfig(env, 'REVIEWER', 'independent-reviewer', missing);
+  const reviewer = parseProviderCommandConfig(env, 'REVIEWER', 'openai-reviewer', missing);
 
   let githubApp: EnvironmentConfig | undefined;
   let githubAppError: string | undefined;
@@ -115,12 +127,8 @@ export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined>
     githubAppError = error instanceof Error ? error.message : 'GitHub App configuration invalid';
   }
 
-  if (missing.length > 0) {
-    throw new Error(`Missing required runtime configuration: ${missing.join(', ')}`);
-  }
-  if (!githubApp) {
-    throw new Error(githubAppError ?? 'GitHub App configuration invalid');
-  }
+  if (missing.length > 0) throw new Error(`Missing required runtime configuration: ${missing.join(', ')}`);
+  if (!githubApp) throw new Error(githubAppError ?? 'GitHub App configuration invalid');
 
   if (builder.name.trim().toLowerCase() === reviewer.name.trim().toLowerCase()) {
     throw new Error('COMMANDER_BUILDER_NAME and COMMANDER_REVIEWER_NAME must be different provider identities');
@@ -136,8 +144,6 @@ export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined>
     maxAttempts: parsePositiveInt(env, 'COMMANDER_CI_MAX_ATTEMPTS', DEFAULT_CI_MAX_ATTEMPTS),
     intervalMs: parsePositiveInt(env, 'COMMANDER_CI_INTERVAL_MS', DEFAULT_CI_INTERVAL_MS),
   };
-
   const repairPolicy = createRepairPolicy(parseOptionalInt(env, 'COMMANDER_MAX_REPAIR_CYCLES'));
-
   return { planner, builder, reviewer, ci, githubApp, repairPolicy };
 }

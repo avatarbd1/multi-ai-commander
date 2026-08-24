@@ -115,9 +115,9 @@ function parseProviderCommandConfig(
 /** Loads Commander's runtime config and fails closed on missing commands/auth or identity collisions. */
 export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined> = process.env): RuntimeConfig {
   const missing: string[] = [];
-  const planner = parseProviderCommandConfig(env, 'PLANNER', 'openai-planner', missing);
+  const planner = parseProviderCommandConfig(env, 'PLANNER', 'chatgpt-planner', missing);
   const builder = parseProviderCommandConfig(env, 'BUILDER', 'claude', missing);
-  const reviewer = parseProviderCommandConfig(env, 'REVIEWER', 'openai-reviewer', missing);
+  const reviewer = parseProviderCommandConfig(env, 'REVIEWER', 'independent-reviewer', missing);
 
   let githubApp: EnvironmentConfig | undefined;
   let githubAppError: string | undefined;

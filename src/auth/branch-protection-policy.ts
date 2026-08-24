@@ -1,3 +1,5 @@
+import type { GitHubBranchProtectionResponse } from '../github/client.js';
+
 export interface BranchProtectionPolicy {
   branch: string;
   repository: string;
@@ -13,6 +15,92 @@ export interface BranchProtectionPolicy {
   enforceAdmins: boolean;
   allowForcePushes: boolean;
   allowDeletions: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Maps GitHub's raw branch-protection REST response (nested, snake_case)
+ * into the internal camelCase `BranchProtectionPolicy` domain type.
+ *
+ * `required_status_checks` and `required_pull_request_reviews` may
+ * legitimately be absent/null when GitHub has no such requirement
+ * configured — that maps to the least-protected values and is left for
+ * `BranchProtectionVerifier` to flag as a violation. `enforce_admins`,
+ * `allow_force_pushes` and `allow_deletions` are always present on a real
+ * branch-protection response; a response missing them, or with the wrong
+ * shape, is treated as malformed and this function throws so the caller
+ * fails closed instead of silently treating it as compliant.
+ */
+export function mapGitHubBranchProtectionResponse(
+  repository: string,
+  branch: string,
+  raw: GitHubBranchProtectionResponse | Record<string, unknown>,
+): BranchProtectionPolicy {
+  if (!isRecord(raw)) {
+    throw new Error('Malformed GitHub branch protection response: expected an object');
+  }
+
+  const requiredStatusChecks = raw.required_status_checks;
+  if (requiredStatusChecks !== null && requiredStatusChecks !== undefined && !isRecord(requiredStatusChecks)) {
+    throw new Error('Malformed GitHub branch protection response: required_status_checks');
+  }
+
+  const requiredPullRequestReviews = raw.required_pull_request_reviews;
+  if (
+    requiredPullRequestReviews !== null &&
+    requiredPullRequestReviews !== undefined &&
+    !isRecord(requiredPullRequestReviews)
+  ) {
+    throw new Error('Malformed GitHub branch protection response: required_pull_request_reviews');
+  }
+
+  const enforceAdmins = raw.enforce_admins;
+  if (!isRecord(enforceAdmins) || typeof enforceAdmins.enabled !== 'boolean') {
+    throw new Error('Malformed GitHub branch protection response: enforce_admins');
+  }
+
+  const allowForcePushes = raw.allow_force_pushes;
+  if (!isRecord(allowForcePushes) || typeof allowForcePushes.enabled !== 'boolean') {
+    throw new Error('Malformed GitHub branch protection response: allow_force_pushes');
+  }
+
+  const allowDeletions = raw.allow_deletions;
+  if (!isRecord(allowDeletions) || typeof allowDeletions.enabled !== 'boolean') {
+    throw new Error('Malformed GitHub branch protection response: allow_deletions');
+  }
+
+  const contexts =
+    isRecord(requiredStatusChecks) && Array.isArray(requiredStatusChecks.contexts)
+      ? requiredStatusChecks.contexts.filter((context): context is string => typeof context === 'string')
+      : [];
+
+  return {
+    repository,
+    branch,
+    requiredStatusChecks: {
+      strict: isRecord(requiredStatusChecks) ? requiredStatusChecks.strict === true : false,
+      contexts,
+    },
+    requiredPullRequestReviews: {
+      dismissStaleReviews: isRecord(requiredPullRequestReviews)
+        ? requiredPullRequestReviews.dismiss_stale_reviews === true
+        : false,
+      requireCodeOwnerReviews: isRecord(requiredPullRequestReviews)
+        ? requiredPullRequestReviews.require_code_owner_reviews === true
+        : false,
+      requiredApprovingReviewCount:
+        isRecord(requiredPullRequestReviews) &&
+        typeof requiredPullRequestReviews.required_approving_review_count === 'number'
+          ? requiredPullRequestReviews.required_approving_review_count
+          : 0,
+    },
+    enforceAdmins: enforceAdmins.enabled === true,
+    allowForcePushes: allowForcePushes.enabled === true,
+    allowDeletions: allowDeletions.enabled === true,
+  };
 }
 
 export interface BranchProtectionRequirement {

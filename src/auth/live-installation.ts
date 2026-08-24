@@ -1,35 +1,38 @@
 import type { GitHubRestClient } from '../github/client.js';
-import type { BranchProtectionPolicy } from './branch-protection-policy.js';
-import { BranchProtectionVerifier } from './branch-protection-policy.js';
-
-export interface InstallationPermissions {
-  repository: string;
-  installationId: number;
-  permissions: {
-    pull: 'read' | 'write' | 'admin';
-    push: 'read' | 'write' | 'admin';
-    contents: 'read' | 'write' | 'admin';
-    checks: 'read' | 'write' | 'admin';
-  };
-}
+import { BranchProtectionVerifier, mapGitHubBranchProtectionResponse } from './branch-protection-policy.js';
 
 export interface InstallationRequirements {
-  minPullPermission: 'read' | 'write' | 'admin';
-  minPushPermission: 'read' | 'write' | 'admin';
   minContentsPermission: 'read' | 'write' | 'admin';
-  minChecksPermission: 'read' | 'write';
+  minPullRequestsPermission: 'read' | 'write' | 'admin';
+  minChecksPermission: 'read' | 'write' | 'admin';
   requireBranchProtection: boolean;
   requiredBranch: string;
 }
 
 export const DEFAULT_REQUIREMENTS: InstallationRequirements = {
-  minPullPermission: 'read',
-  minPushPermission: 'write',
   minContentsPermission: 'write',
+  minPullRequestsPermission: 'write',
   minChecksPermission: 'read',
   requireBranchProtection: true,
   requiredBranch: 'main',
 };
+
+const PERMISSION_RANK: Record<string, number> = { read: 1, write: 2, admin: 3 };
+
+function meetsMinimumPermission(actual: string | undefined, minimum: string): boolean {
+  const actualRank = actual ? (PERMISSION_RANK[actual] ?? 0) : 0;
+  const minimumRank = PERMISSION_RANK[minimum] ?? Number.MAX_SAFE_INTEGER;
+  return actualRank >= minimumRank;
+}
+
+/**
+ * Case-insensitive EXACT match of a GitHub "owner/repo" identity string.
+ * Deliberately not a substring/`includes` check: `evil-org/repo` and
+ * `org/repository` must never be treated as matching `org/repo`.
+ */
+export function repositoryIdentitiesMatch(expected: string, actual: string): boolean {
+  return expected.trim().toLowerCase() === actual.trim().toLowerCase();
+}
 
 export class LiveInstallationVerifier {
   public static async verify(
@@ -40,22 +43,49 @@ export class LiveInstallationVerifier {
   ): Promise<{ satisfied: boolean; violations: string[] }> {
     const violations: string[] = [];
 
+    if (client.installationId !== installationId) {
+      violations.push('Installation ID mismatch between verification request and authenticated client');
+      return { satisfied: false, violations };
+    }
+
     try {
       const repo = await client.getRepository(repository);
-      if (!repo.fullName.toLowerCase().includes(repository.toLowerCase())) {
-        violations.push('Repository access failed: cannot read repository');
+      if (!repositoryIdentitiesMatch(repository, repo.fullName)) {
+        violations.push('Repository access failed: resolved repository does not match requested repository');
       }
     } catch (error) {
       violations.push(`Repository access verification failed: ${error instanceof Error ? '[REDACTED]' : 'unknown error'}`);
     }
 
+    try {
+      const permissions = await client.getInstallationPermissions();
+      if (!meetsMinimumPermission(permissions.contents, requirements.minContentsPermission)) {
+        violations.push(
+          `Installation permission 'contents' is '${permissions.contents ?? 'none'}', requires at least '${requirements.minContentsPermission}'`,
+        );
+      }
+      if (!meetsMinimumPermission(permissions.pull_requests, requirements.minPullRequestsPermission)) {
+        violations.push(
+          `Installation permission 'pull_requests' is '${permissions.pull_requests ?? 'none'}', requires at least '${requirements.minPullRequestsPermission}'`,
+        );
+      }
+      if (!meetsMinimumPermission(permissions.checks, requirements.minChecksPermission)) {
+        violations.push(
+          `Installation permission 'checks' is '${permissions.checks ?? 'none'}', requires at least '${requirements.minChecksPermission}'`,
+        );
+      }
+    } catch (error) {
+      violations.push(`Installation permission verification failed: ${error instanceof Error ? '[REDACTED]' : 'unknown error'}`);
+    }
+
     if (requirements.requireBranchProtection) {
       try {
-        const policy = await client.getBranchProtectionPolicy(repository, requirements.requiredBranch);
-        if (!policy) {
+        const rawPolicy = await client.getBranchProtectionPolicy(repository, requirements.requiredBranch);
+        if (!rawPolicy) {
           violations.push(`Branch protection not enforced on ${requirements.requiredBranch}`);
         } else {
-          const verification = BranchProtectionVerifier.verify(policy as any);
+          const policy = mapGitHubBranchProtectionResponse(repository, requirements.requiredBranch, rawPolicy);
+          const verification = BranchProtectionVerifier.verify(policy);
           if (!verification.satisfied) {
             violations.push(...verification.violations.map((v) => `Branch protection: ${v}`));
           }

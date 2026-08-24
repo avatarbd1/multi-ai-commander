@@ -213,3 +213,288 @@ test('Fail-closed semantics: insufficient permissions block deployment', async (
   const result = LiveInstallationVerifier.failClosed(verification);
   assert.equal(result.allowed, false);
 });
+
+// --- Installation permission verification (real GitHub App permission scopes) ---
+
+function makeStubClient({
+  installationId = 1,
+  repoFullName = 'test/repo',
+  permissions = { contents: 'write', pull_requests: 'write', checks: 'read' },
+  permissionsError = null,
+  branchProtection = null,
+  branchProtectionError = null,
+} = {}) {
+  return {
+    installationId,
+    async getRepository() {
+      return { fullName: repoFullName };
+    },
+    async getInstallationPermissions() {
+      if (permissionsError) throw permissionsError;
+      return permissions;
+    },
+    async getBranchProtectionPolicy() {
+      if (branchProtectionError) throw branchProtectionError;
+      return branchProtection;
+    },
+  };
+}
+
+const NO_BRANCH_PROTECTION_REQUIREMENTS = {
+  minContentsPermission: 'write',
+  minPullRequestsPermission: 'write',
+  minChecksPermission: 'read',
+  requireBranchProtection: false,
+  requiredBranch: 'main',
+};
+
+test('Live installation verifier fails when contents permission is insufficient', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ permissions: { contents: 'read', pull_requests: 'write', checks: 'read' } });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, NO_BRANCH_PROTECTION_REQUIREMENTS);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes("'contents'")));
+});
+
+test('Live installation verifier fails when pull_requests permission is insufficient', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ permissions: { contents: 'write', pull_requests: 'read', checks: 'read' } });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, NO_BRANCH_PROTECTION_REQUIREMENTS);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes("'pull_requests'")));
+});
+
+test('Live installation verifier fails when checks permission is insufficient', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ permissions: { contents: 'write', pull_requests: 'write', checks: undefined } });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, NO_BRANCH_PROTECTION_REQUIREMENTS);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes("'checks'")));
+});
+
+test('Live installation verifier passes when all required permissions are met', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ permissions: { contents: 'admin', pull_requests: 'write', checks: 'read' } });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, NO_BRANCH_PROTECTION_REQUIREMENTS);
+  assert.equal(result.satisfied, true);
+  assert.equal(result.violations.length, 0);
+});
+
+test('Live installation verifier fails closed when the permissions API errors', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ permissionsError: new Error('GitHub request failed (500)') });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, NO_BRANCH_PROTECTION_REQUIREMENTS);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('Installation permission verification failed')));
+});
+
+test('Live installation verifier fails closed on a supplied-installation-ID mismatch', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ installationId: 1 });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 999, NO_BRANCH_PROTECTION_REQUIREMENTS);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('Installation ID mismatch')));
+});
+
+// --- Branch protection: raw GitHub response mapping (blocker: no `as any`) ---
+
+function rawProtection(overrides = {}) {
+  return {
+    required_status_checks: { strict: true, contexts: ['ci/lint', 'ci/test'] },
+    required_pull_request_reviews: {
+      dismiss_stale_reviews: true,
+      require_code_owner_reviews: false,
+      required_approving_review_count: 1,
+    },
+    enforce_admins: { enabled: true },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false },
+    ...overrides,
+  };
+}
+
+test('Branch protection mapper: fully compliant GitHub response maps to a passing policy', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse('test/repo', 'main', rawProtection());
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, true);
+  assert.equal(result.violations.length, 0);
+});
+
+test('Branch protection mapper: strict=false fails verification', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse(
+    'test/repo',
+    'main',
+    rawProtection({ required_status_checks: { strict: false, contexts: ['ci'] } }),
+  );
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('strict-status-checks')));
+});
+
+test('Branch protection mapper: no required status check contexts fails verification', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse(
+    'test/repo',
+    'main',
+    rawProtection({ required_status_checks: { strict: true, contexts: [] } }),
+  );
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('status-checks-defined')));
+});
+
+test('Branch protection mapper: zero required approving reviews fails verification', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse(
+    'test/repo',
+    'main',
+    rawProtection({
+      required_pull_request_reviews: {
+        dismiss_stale_reviews: true,
+        require_code_owner_reviews: false,
+        required_approving_review_count: 0,
+      },
+    }),
+  );
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('require-reviews')));
+});
+
+test('Branch protection mapper: stale-review dismissal disabled fails verification', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse(
+    'test/repo',
+    'main',
+    rawProtection({
+      required_pull_request_reviews: {
+        dismiss_stale_reviews: false,
+        require_code_owner_reviews: false,
+        required_approving_review_count: 1,
+      },
+    }),
+  );
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('dismiss-stale-reviews')));
+});
+
+test('Branch protection mapper: admin enforcement disabled fails verification', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse(
+    'test/repo',
+    'main',
+    rawProtection({ enforce_admins: { enabled: false } }),
+  );
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('enforce-admins')));
+});
+
+test('Branch protection mapper: force pushes allowed fails verification', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse(
+    'test/repo',
+    'main',
+    rawProtection({ allow_force_pushes: { enabled: true } }),
+  );
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('disable-force-push')));
+});
+
+test('Branch protection mapper: deletions allowed fails verification', async () => {
+  const { mapGitHubBranchProtectionResponse, BranchProtectionVerifier } = await import(
+    '../dist/auth/branch-protection-policy.js'
+  );
+  const policy = mapGitHubBranchProtectionResponse(
+    'test/repo',
+    'main',
+    rawProtection({ allow_deletions: { enabled: true } }),
+  );
+  const result = BranchProtectionVerifier.verify(policy);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('disable-deletions')));
+});
+
+test('Branch protection mapper: malformed GitHub response fails closed by throwing', async () => {
+  const { mapGitHubBranchProtectionResponse } = await import('../dist/auth/branch-protection-policy.js');
+
+  assert.throws(() => mapGitHubBranchProtectionResponse('test/repo', 'main', null));
+  assert.throws(() => mapGitHubBranchProtectionResponse('test/repo', 'main', { enforce_admins: 'not-an-object' }));
+  assert.throws(() =>
+    mapGitHubBranchProtectionResponse('test/repo', 'main', rawProtection({ allow_force_pushes: { enabled: 'yes' } })),
+  );
+});
+
+test('Live installation verifier fails closed when branch protection is missing (404)', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ branchProtection: null });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, {
+    ...NO_BRANCH_PROTECTION_REQUIREMENTS,
+    requireBranchProtection: true,
+  });
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('not enforced')));
+});
+
+test('Live installation verifier passes when branch protection response is fully compliant', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ branchProtection: rawProtection() });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, {
+    ...NO_BRANCH_PROTECTION_REQUIREMENTS,
+    requireBranchProtection: true,
+  });
+  assert.equal(result.satisfied, true);
+  assert.equal(result.violations.length, 0);
+});
+
+// --- Repository identity must be an exact match, not a substring match ---
+
+test('repositoryIdentitiesMatch: case-insensitive exact match succeeds', async () => {
+  const { repositoryIdentitiesMatch } = await import('../dist/auth/live-installation.js');
+  assert.equal(repositoryIdentitiesMatch('test/repo', 'TEST/REPO'), true);
+});
+
+test('repositoryIdentitiesMatch: rejects a prefixed lookalike repository', async () => {
+  const { repositoryIdentitiesMatch } = await import('../dist/auth/live-installation.js');
+  assert.equal(repositoryIdentitiesMatch('test/repo', 'evil-test/repo'), false);
+});
+
+test('repositoryIdentitiesMatch: rejects a suffixed lookalike repository', async () => {
+  const { repositoryIdentitiesMatch } = await import('../dist/auth/live-installation.js');
+  assert.equal(repositoryIdentitiesMatch('test/repo', 'test/repository'), false);
+});
+
+test('Live installation verifier fails closed on a substring-lookalike repository', async () => {
+  const { LiveInstallationVerifier } = await import('../dist/auth/live-installation.js');
+  const client = makeStubClient({ repoFullName: 'evil-test/repo' });
+
+  const result = await LiveInstallationVerifier.verify(client, 'test/repo', 1, NO_BRANCH_PROTECTION_REQUIREMENTS);
+  assert.equal(result.satisfied, false);
+  assert(result.violations.some((v) => v.includes('does not match requested repository')));
+});

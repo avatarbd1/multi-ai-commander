@@ -28,7 +28,10 @@ test('GitHub App JWT uses RS256 and safe clock claims', async () => {
     fetchImpl: async (_url, init) => {
       const authorization = new Headers(init?.headers).get('Authorization');
       capturedJwt = authorization?.replace(/^Bearer /, '') ?? '';
-      return jsonResponse({ token: 'installation-token', expires_at: '2026-08-24T01:00:00Z' }, 201);
+      return jsonResponse(
+        { token: 'installation-token', expires_at: '2026-08-24T01:00:00Z', permissions: { contents: 'write' } },
+        201,
+      );
     },
   });
 
@@ -72,7 +75,10 @@ test('installation token expiry is parsed from expires_at and cache refreshes be
     fetchImpl: async () => {
       calls += 1;
       const expiresAt = new Date(nowMs + 5 * 60_000).toISOString();
-      return jsonResponse({ token: `token-${calls}`, expires_at: expiresAt }, 201);
+      return jsonResponse(
+        { token: `token-${calls}`, expires_at: expiresAt, permissions: { contents: 'write' } },
+        201,
+      );
     },
   });
 
@@ -96,7 +102,10 @@ test('concurrent refreshes use single-flight token exchange', async () => {
     fetchImpl: async () => {
       calls += 1;
       await gate;
-      return jsonResponse({ token: 'one-token', expires_at: '2026-08-24T01:00:00Z' }, 201);
+      return jsonResponse(
+        { token: 'one-token', expires_at: '2026-08-24T01:00:00Z', permissions: { contents: 'write' } },
+        201,
+      );
     },
   });
 
@@ -160,7 +169,14 @@ test('setup validation distinguishes local config from live installation verific
   const fetchImpl = async (url) => {
     calls += 1;
     if (String(url).includes('/access_tokens')) {
-      return jsonResponse({ token: 'live-token', expires_at: new Date(Date.now() + 60 * 60_000).toISOString() }, 201);
+      return jsonResponse(
+        {
+          token: 'live-token',
+          expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+          permissions: { contents: 'write' },
+        },
+        201,
+      );
     }
     return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
   };
@@ -184,6 +200,7 @@ test('broker-backed GitHub client refreshes token after authoritative expiry win
       return jsonResponse({
         token: `token-${tokenCalls}`,
         expires_at: new Date(nowMs + 3 * 60_000).toISOString(),
+        permissions: { contents: 'write' },
       }, 201);
     },
   });

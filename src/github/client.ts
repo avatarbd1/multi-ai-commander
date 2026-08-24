@@ -1,7 +1,7 @@
 import type { GitHubCheckRun, PullRequestSnapshot } from './types.js';
 import { toCiEvidence } from './types.js';
 import type { CiEvidence } from '../commander/types.js';
-import type { CredentialBroker } from '../auth/types.js';
+import type { CredentialBroker, GitHubInstallationPermissions } from '../auth/types.js';
 
 function textToBase64(value: string): string {
   const bytes = new TextEncoder().encode(value);
@@ -64,6 +64,26 @@ interface GitHubRepositoryResponse {
   full_name: string;
 }
 
+/**
+ * Raw shape of GitHub's branch-protection REST response
+ * (`GET /repos/{owner}/{repo}/branches/{branch}/protection`). Fields are
+ * nested/snake_case exactly as GitHub returns them; callers must map this
+ * into the internal `BranchProtectionPolicy` domain type before evaluating
+ * it — see `mapGitHubBranchProtectionResponse` in
+ * `src/auth/branch-protection-policy.ts`.
+ */
+export interface GitHubBranchProtectionResponse {
+  required_status_checks?: { strict?: boolean; contexts?: string[] } | null;
+  required_pull_request_reviews?: {
+    dismiss_stale_reviews?: boolean;
+    require_code_owner_reviews?: boolean;
+    required_approving_review_count?: number;
+  } | null;
+  enforce_admins?: { enabled?: boolean } | null;
+  allow_force_pushes?: { enabled?: boolean } | null;
+  allow_deletions?: { enabled?: boolean } | null;
+}
+
 export interface PullRequestUpdate {
   title?: string;
   body?: string;
@@ -96,8 +116,16 @@ export class GitHubRestClient {
     }
   }
 
+  public get installationId(): number {
+    return this.config.installationId;
+  }
+
   private async getToken(): Promise<string> {
     return this.config.broker.getInstallationToken(this.config.installationId);
+  }
+
+  public async getInstallationPermissions(): Promise<GitHubInstallationPermissions> {
+    return this.config.broker.getInstallationPermissions(this.config.installationId);
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -158,9 +186,9 @@ export class GitHubRestClient {
   public async getBranchProtectionPolicy(
     repository: string,
     branch: string,
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<GitHubBranchProtectionResponse | null> {
     try {
-      return await this.request<Record<string, unknown>>(
+      return await this.request<GitHubBranchProtectionResponse>(
         `/repos/${repository}/branches/${encodeURIComponent(branch)}/protection`,
       );
     } catch (error) {

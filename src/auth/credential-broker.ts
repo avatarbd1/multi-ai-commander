@@ -1,8 +1,9 @@
-import type { CredentialBroker } from './types.js';
+import type { CredentialBroker, GitHubInstallationPermissions } from './types.js';
 
 export interface TokenCacheEntry {
   token: string;
   expiresAt: number;
+  permissions: GitHubInstallationPermissions;
 }
 
 export interface GitHubAppCredentialBrokerOptions {
@@ -14,6 +15,7 @@ export interface GitHubAppCredentialBrokerOptions {
 interface InstallationTokenResponse {
   token?: string;
   expires_at?: string;
+  permissions?: Record<string, string>;
 }
 
 const DEFAULT_REFRESH_SKEW_MS = 60_000;
@@ -120,20 +122,28 @@ export class GitHubAppCredentialBroker implements CredentialBroker {
   }
 
   public async getInstallationToken(installationId: number): Promise<string> {
+    return (await this.getEntry(installationId)).token;
+  }
+
+  public async getInstallationPermissions(installationId: number): Promise<GitHubInstallationPermissions> {
+    return (await this.getEntry(installationId)).permissions;
+  }
+
+  private async getEntry(installationId: number): Promise<TokenCacheEntry> {
     if (!Number.isSafeInteger(installationId) || installationId <= 0) {
       throw new Error('COMMANDER_GH_INSTALLATION_ID must be a positive integer');
     }
 
     const cached = this.tokenCache.get(installationId);
-    if (cached && cached.expiresAt > this.now() + this.refreshSkewMs) return cached.token;
+    if (cached && cached.expiresAt > this.now() + this.refreshSkewMs) return cached;
 
     const inFlight = this.refreshes.get(installationId);
-    if (inFlight) return (await inFlight).token;
+    if (inFlight) return inFlight;
 
     const refresh = this.requestFreshToken(installationId);
     this.refreshes.set(installationId, refresh);
     try {
-      return (await refresh).token;
+      return await refresh;
     } finally {
       this.refreshes.delete(installationId);
     }
@@ -213,7 +223,10 @@ export class GitHubAppCredentialBroker implements CredentialBroker {
     if (!Number.isFinite(expiresAt) || expiresAt <= this.now()) {
       throw new Error('GitHub installation token expiry was invalid');
     }
-    return { token: data.token, expiresAt };
+    if (!data.permissions || typeof data.permissions !== 'object' || Array.isArray(data.permissions)) {
+      throw new Error('GitHub installation token response did not include a permissions grant');
+    }
+    return { token: data.token, expiresAt, permissions: data.permissions as GitHubInstallationPermissions };
   }
 
   public async validateConfiguration(): Promise<void> {

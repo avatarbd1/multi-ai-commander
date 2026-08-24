@@ -12,6 +12,7 @@ const VALID_GITHUB_APP_ENV = {
 function baseEnv(overrides = {}) {
   return {
     ...VALID_GITHUB_APP_ENV,
+    COMMANDER_PLANNER_COMMAND: '/usr/bin/true',
     COMMANDER_BUILDER_COMMAND: '/usr/bin/true',
     COMMANDER_REVIEWER_COMMAND: '/usr/bin/true',
     ...overrides,
@@ -50,6 +51,30 @@ test('loadRuntimeConfigFromEnv rejects a builder/reviewer provider identity coll
   );
 });
 
+test('loadRuntimeConfigFromEnv fails closed when the planner command is missing', () => {
+  const env = baseEnv({ COMMANDER_PLANNER_COMMAND: undefined });
+  assert.throws(
+    () => loadRuntimeConfigFromEnv(env),
+    (error) => error instanceof Error && error.message.includes('COMMANDER_PLANNER_COMMAND'),
+  );
+});
+
+test('loadRuntimeConfigFromEnv rejects a planner/builder provider identity collision', () => {
+  const env = baseEnv({ COMMANDER_PLANNER_NAME: 'same-name', COMMANDER_BUILDER_NAME: 'Same-Name' });
+  assert.throws(
+    () => loadRuntimeConfigFromEnv(env),
+    (error) => error instanceof Error && /different provider identities/i.test(error.message),
+  );
+});
+
+test('loadRuntimeConfigFromEnv rejects a planner/reviewer provider identity collision', () => {
+  const env = baseEnv({ COMMANDER_PLANNER_NAME: 'same-name', COMMANDER_REVIEWER_NAME: 'Same-Name' });
+  assert.throws(
+    () => loadRuntimeConfigFromEnv(env),
+    (error) => error instanceof Error && /different provider identities/i.test(error.message),
+  );
+});
+
 test('loadRuntimeConfigFromEnv applies safe defaults and reports both required-value gaps together', () => {
   const env = baseEnv({ COMMANDER_BUILDER_COMMAND: undefined, COMMANDER_REVIEWER_COMMAND: undefined });
   assert.throws(
@@ -60,6 +85,8 @@ test('loadRuntimeConfigFromEnv applies safe defaults and reports both required-v
 
 test('loadRuntimeConfigFromEnv returns a fully-populated config with correct defaults', () => {
   const config = loadRuntimeConfigFromEnv(baseEnv());
+  assert.equal(config.planner.name, 'chatgpt-planner');
+  assert.equal(config.planner.executable, '/usr/bin/true');
   assert.equal(config.builder.name, 'claude');
   assert.equal(config.builder.executable, '/usr/bin/true');
   assert.deepEqual(config.builder.args, []);
@@ -74,6 +101,7 @@ test('loadRuntimeConfigFromEnv returns a fully-populated config with correct def
 
 test('loadRuntimeConfigFromEnv honors overrides for names, args, timeouts and CI polling', () => {
   const config = loadRuntimeConfigFromEnv(baseEnv({
+    COMMANDER_PLANNER_NAME: 'chatgpt',
     COMMANDER_BUILDER_NAME: 'claude-builder',
     COMMANDER_REVIEWER_NAME: 'gpt-reviewer',
     COMMANDER_BUILDER_ARGS: '["--flag","value"]',
@@ -82,6 +110,7 @@ test('loadRuntimeConfigFromEnv honors overrides for names, args, timeouts and CI
     COMMANDER_CI_MAX_ATTEMPTS: '3',
     COMMANDER_CI_INTERVAL_MS: '250',
   }));
+  assert.equal(config.planner.name, 'chatgpt');
   assert.equal(config.builder.name, 'claude-builder');
   assert.equal(config.reviewer.name, 'gpt-reviewer');
   assert.deepEqual(config.builder.args, ['--flag', 'value']);

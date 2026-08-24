@@ -20,3 +20,9 @@ export interface BuilderProvider<TInput, TOutput> {
   readonly mode: 'active';
   build(input: TInput): Promise<CapturedProviderOutput<TOutput>>;
 }
+
+export interface PlannerProvider<TInput, TOutput> {
+  readonly name: string;
+  readonly mode: 'active';
+  plan(input: TInput): Promise<CapturedProviderOutput<TOutput>>;
+}

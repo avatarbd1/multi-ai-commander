@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "bin": {
-    "commander": "dist/cli/run.js"
+    "commander": "dist/cli/main.js"
   },
   "scripts": {
     "lint": "node scripts/lint.mjs",
@@ -17,7 +17,8 @@
     "test": "npm run build --silent && node --test tests/*.test.mjs",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "validate:github-auth": "npm run build --silent && node dist/auth/setup.js",
-    "commander": "npm run build --silent && node dist/cli/run.js"
+    "validate:runtime-config": "npm run build --silent && node scripts/validate-runtime-config.mjs",
+    "commander": "npm run build --silent && node dist/cli/main.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

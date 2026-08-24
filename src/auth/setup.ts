@@ -45,7 +45,7 @@ export async function verifyLiveInstallation(
   const brokerOptions = options.fetchImpl ? { fetchImpl: options.fetchImpl } : {};
   const broker = new GitHubAppCredentialBroker(config.appId, config.privateKey, brokerOptions);
   await broker.validateConfiguration();
-  const client = new GitHubRestClient(undefined, broker, config.installationId, options.fetchImpl ?? fetch);
+  const client = new GitHubRestClient({ broker, installationId: config.installationId }, options.fetchImpl ?? fetch);
   const resolved = await client.getRepository(repository);
   if (resolved.fullName.toLowerCase() !== repository.toLowerCase()) throw new Error('GitHub repository access verification failed');
   return 'LIVE_INSTALLATION_VERIFIED';

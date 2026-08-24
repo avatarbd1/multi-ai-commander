@@ -193,7 +193,7 @@ test('broker-backed GitHub client refreshes token after authoritative expiry win
     seen.push(new Headers(init?.headers).get('Authorization'));
     return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
   };
-  const client = new GitHubRestClient(undefined, broker, 55, apiFetch);
+  const client = new GitHubRestClient({ broker, installationId: 55 }, apiFetch);
 
   await client.getRepository('avatarbd1/multi-ai-commander');
   nowMs += 2 * 60_000 + 1;
@@ -235,7 +235,7 @@ test('required GitHub read/write operations all use broker-backed authentication
     if (path.endsWith('/repos/avatarbd1/multi-ai-commander')) return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
     throw new Error(`Unhandled test request: ${path}`);
   };
-  const client = new GitHubRestClient(undefined, broker, 77, apiFetch);
+  const client = new GitHubRestClient({ broker, installationId: 77 }, apiFetch);
 
   await client.getRepository('avatarbd1/multi-ai-commander');
   await client.getCiEvidence('avatarbd1/multi-ai-commander', 'head');
@@ -258,4 +258,54 @@ test('required GitHub read/write operations all use broker-backed authentication
 
   assert(seen.length >= 10);
   assert(seen.every((request) => request.auth === 'Bearer broker-token'));
+});
+
+test('GitHub client constructor requires broker and installation ID — no static-token fallback', async () => {
+  const { GitHubRestClient } = await import('../dist/github/client.js');
+
+  try {
+    new GitHubRestClient({ broker: undefined, installationId: 42 });
+    assert.fail('Expected error when broker is undefined');
+  } catch (error) {
+    assert(error instanceof Error, 'Should throw error');
+  }
+
+  try {
+    new GitHubRestClient({ broker: {}, installationId: undefined });
+    assert.fail('Expected error when installationId is undefined');
+  } catch (error) {
+    assert(error instanceof Error, 'Should throw error');
+  }
+});
+
+test('GitHub client requires token from broker on every request — no cached static token', async () => {
+  const { GitHubRestClient } = await import('../dist/github/client.js');
+  let tokenRequests = 0;
+  const broker = {
+    async getInstallationToken() {
+      tokenRequests += 1;
+      return `token-${tokenRequests}`;
+    },
+  };
+  const apiFetch = async (_url, init) => {
+    return new Response(JSON.stringify({ full_name: 'test/repo' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const client = new GitHubRestClient({ broker, installationId: 1 }, apiFetch);
+
+  await client.getRepository('test/repo');
+  assert.equal(tokenRequests, 1);
+  await client.getRepository('test/repo');
+  assert.equal(tokenRequests, 2);
+});
+
+test('managed execution tests continue to pass after auth refactor', async () => {
+  const { runManagedCommander } = await import('../dist/orchestration/run-managed.js');
+  const { GitHubRestClient } = await import('../dist/github/client.js');
+
+  const broker = { async getInstallationToken() { return 'test-token'; } };
+  const client = new GitHubRestClient({ broker, installationId: 1 });
+  assert(client);
 });

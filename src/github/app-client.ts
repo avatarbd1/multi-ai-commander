@@ -1,4 +1,4 @@
-import { GitHubRestClient } from './client.js';
+import { GitHubRestClient, type GitHubAppConfig as ClientConfig } from './client.js';
 import type { GitHubAppConfig } from '../auth/types.js';
 import { GitHubAppCredentialBroker } from '../auth/credential-broker.js';
 
@@ -7,7 +7,7 @@ declare const process: { env: Record<string, string | undefined> };
 export async function createGitHubAppClient(config: GitHubAppConfig): Promise<GitHubRestClient> {
   const broker = new GitHubAppCredentialBroker(config.appId, config.privateKey);
   await broker.validateConfiguration();
-  return new GitHubRestClient(undefined, broker, config.installationId);
+  return new GitHubRestClient({ broker, installationId: config.installationId });
 }
 
 export async function createGitHubAppClientFromEnv(): Promise<GitHubRestClient> {

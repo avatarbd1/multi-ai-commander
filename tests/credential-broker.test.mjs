@@ -193,7 +193,7 @@ test('broker-backed GitHub client refreshes token after authoritative expiry win
     seen.push(new Headers(init?.headers).get('Authorization'));
     return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
   };
-  const client = new GitHubRestClient(undefined, broker, 55, apiFetch);
+  const client = new GitHubRestClient({ broker, installationId: 55 }, apiFetch);
 
   await client.getRepository('avatarbd1/multi-ai-commander');
   nowMs += 2 * 60_000 + 1;
@@ -235,7 +235,7 @@ test('required GitHub read/write operations all use broker-backed authentication
     if (path.endsWith('/repos/avatarbd1/multi-ai-commander')) return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
     throw new Error(`Unhandled test request: ${path}`);
   };
-  const client = new GitHubRestClient(undefined, broker, 77, apiFetch);
+  const client = new GitHubRestClient({ broker, installationId: 77 }, apiFetch);
 
   await client.getRepository('avatarbd1/multi-ai-commander');
   await client.getCiEvidence('avatarbd1/multi-ai-commander', 'head');

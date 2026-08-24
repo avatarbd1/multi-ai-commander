@@ -78,22 +78,26 @@ export class GitHubRequestError extends Error {
   }
 }
 
+export interface GitHubAppConfig {
+  broker: CredentialBroker;
+  installationId: number;
+}
+
 export class GitHubRestClient {
   private readonly baseUrl = 'https://api.github.com';
 
   public constructor(
-    private readonly token?: string,
-    private readonly broker?: CredentialBroker,
-    private readonly installationId?: number,
+    private readonly config: GitHubAppConfig,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
-
-  private async getToken(): Promise<string | undefined> {
-    if (this.broker) {
-      if (!this.installationId) throw new Error('GitHub App installation ID is required');
-      return this.broker.getInstallationToken(this.installationId);
+  ) {
+    if (!config.broker) throw new Error('GitHub App credential broker is required');
+    if (!Number.isSafeInteger(config.installationId) || config.installationId <= 0) {
+      throw new Error('GitHub App installation ID must be a positive integer');
     }
-    return this.token;
+  }
+
+  private async getToken(): Promise<string> {
+    return this.config.broker.getInstallationToken(this.config.installationId);
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -149,6 +153,23 @@ export class GitHubRestClient {
       `/repos/${repository}/branches/${encodeURIComponent(branch)}`,
     );
     return result.commit.sha;
+  }
+
+  public async getBranchProtectionPolicy(
+    repository: string,
+    branch: string,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const result = await this.request<Record<string, unknown>>(
+        `/repos/${repository}/branches/${encodeURIComponent(branch)}/protection`,
+      );
+      return result;
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   public async getPullRequest(repository: string, number: number): Promise<PullRequestSnapshot> {

@@ -76,6 +76,7 @@ See [`docs/AUTH_GITHUB_APP.md`](docs/AUTH_GITHUB_APP.md) for setup and rotation 
 
 - [`docs/PHASE1_SCOPE.md`](docs/PHASE1_SCOPE.md) — Phase 1 scope and constraints
 - [`docs/PHASE2_MANAGED_EXECUTION.md`](docs/PHASE2_MANAGED_EXECUTION.md) — Phase 2 managed execution details
+- [`docs/RUNNING.md`](docs/RUNNING.md) — the `commander run --task <task-contract.json>` CLI
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — System architecture and fail-closed rules
 - [`docs/SECURITY.md`](docs/SECURITY.md) — Security boundaries and isolation
 - [`docs/AUTH_GITHUB_APP.md`](docs/AUTH_GITHUB_APP.md) — GitHub App credential broker setup

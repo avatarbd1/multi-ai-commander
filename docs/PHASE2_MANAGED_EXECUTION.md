@@ -37,3 +37,7 @@ Provider commands are run without a shell, with timeout and output-size limits. 
 ## Human gate
 
 The integrated `runManagedCommander()` path stops at `HUMAN_GATE` only when the deterministic Phase-1 verdict is `PASS`. `NEEDS_FIX` and `BLOCKED` do not advance to merge. Production deployment remains outside this workflow and requires separate explicit approval.
+
+## Running it
+
+`commander run --task <task-contract.json>` is the one runnable control surface over this pipeline: it validates the task, loads runtime configuration, verifies GitHub App access, wires the canonical GitHub client and the Builder/Reviewer provider adapters, and invokes `runManagedCommander()`. See [`RUNNING.md`](RUNNING.md) for the exact command, required environment variables, and a runnable example task.

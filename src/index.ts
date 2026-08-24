@@ -8,3 +8,7 @@ export * from './github/client.js';
 export * from './github/types.js';
 export * from './review/validate-review.js';
 export * from './audit/hash-chain.js';
+export * from './orchestration/target-resolver.js';
+export * from './orchestration/state-machine.js';
+export * from './orchestration/live-target-access.js';
+export * from './orchestration/prepare-target.js';

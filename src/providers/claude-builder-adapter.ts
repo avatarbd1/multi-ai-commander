@@ -12,6 +12,12 @@ import type { ProviderCommandConfig } from '../config/runtime-config.js';
  * for every active provider, so this adapter cannot become a second
  * orchestration path.
  *
+ * The same configured command handles both an initial build and a repair
+ * attempt -- there is no separate repair execution path. The two requests
+ * are explicitly distinguishable on the wire: a repair carries a `repair`
+ * field (a RepairRequest, `kind: 'repair'`) that an initial BuilderRequest
+ * never has (see src/orchestration/repair-request.ts).
+ *
  * The configured command is opaque to Commander -- it must be an
  * operator-supplied executable that speaks the BuilderRequest/BuilderResponse
  * JSON contract on stdin/stdout (a wrapper around a real Claude CLI/runtime,

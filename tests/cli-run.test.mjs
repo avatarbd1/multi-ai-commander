@@ -27,12 +27,15 @@ function makeRuntimeConfig() {
     reviewer: { name: 'independent-reviewer', executable: '/usr/bin/true', args: [], env: {}, timeoutMs: 1000, maxOutputBytes: 1024 },
     ci: { maxAttempts: 1, intervalMs: 0 },
     githubApp: { appId: '123456', installationId: 99, privateKey: 'fake' },
+    repairPolicy: { maxRepairCycles: 2 },
   };
 }
 
 function humanGateResult() {
   return {
     state: 'HUMAN_GATE',
+    attempts: 1,
+    finalSha: 'deadbeef',
     decision: {
       taskId: VALID_TASK.id,
       verdict: 'PASS',
@@ -60,7 +63,8 @@ function humanGateResult() {
 function blockedResult() {
   return {
     state: 'BLOCKED',
-    blocker: 'BUILD_VERIFICATION_FAILED',
+    attempts: 3,
+    blocker: 'REPAIR_LIMIT_EXCEEDED',
     audit: { all: () => [1] },
   };
 }
@@ -158,7 +162,23 @@ test('same Builder/Reviewer identity is rejected end-to-end through the real run
   assert.match(result.error, /different provider identities/i);
 });
 
-test('GitHub App validation failure fails closed with exit code 2 and never reaches the pipeline', async () => {
+test('a GitHub App authentication failure (broker/client construction itself fails) is BLOCKED/ERROR with zero repair attempts', async () => {
+  let orchestrationCalled = false;
+  const { exitCode, result } = await runCli(
+    ['run', '--task', 'x.json'],
+    fullMockDeps({
+      createGitHubClient: async () => { throw new Error('COMMANDER_GH_PRIVATE_KEY is not a valid RSA private key'); },
+      runOrchestration: async () => { orchestrationCalled = true; return humanGateResult(); },
+    }),
+  );
+  assert.equal(exitCode, 2);
+  assert.equal(result.status, 'ERROR');
+  assert.match(result.error, /COMMANDER_GH_PRIVATE_KEY/);
+  assert.equal(result.attempts, undefined);
+  assert.equal(orchestrationCalled, false);
+});
+
+test('GitHub App installation/permission failure fails closed with exit code 2 and never reaches the pipeline (zero repair attempts)', async () => {
   let orchestrationCalled = false;
   const { exitCode, result } = await runCli(
     ['run', '--task', 'x.json'],
@@ -170,6 +190,7 @@ test('GitHub App validation failure fails closed with exit code 2 and never reac
   assert.equal(exitCode, 2);
   assert.match(result.error, /GITHUB_APP_VALIDATION_FAILED/);
   assert.equal(result.githubAppValidation.satisfied, false);
+  assert.equal(result.attempts, undefined);
   assert.equal(orchestrationCalled, false);
 });
 
@@ -180,11 +201,14 @@ test('successful mocked end-to-end run reaches HUMAN_GATE with exit code 0', asy
   assert.equal(result.verdict, 'PASS');
   assert.equal(result.pullRequest.number, 42);
   assert.equal(result.auditEventCount, 3);
+  assert.equal(result.attempts, 1);
+  assert.equal(result.finalSha, 'deadbeef');
 });
 
 test('a failing pipeline stage returns BLOCKED with a nonzero exit code', async () => {
   const { exitCode, result } = await runCli(['run', '--task', 'x.json'], fullMockDeps({ runOrchestration: async () => blockedResult() }));
   assert.equal(exitCode, 1);
   assert.equal(result.status, 'BLOCKED');
-  assert.equal(result.blocker, 'BUILD_VERIFICATION_FAILED');
+  assert.equal(result.lastFailure, 'REPAIR_LIMIT_EXCEEDED');
+  assert.equal(result.attempts, 3);
 });

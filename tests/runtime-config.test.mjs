@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadRuntimeConfigFromEnv } from '../dist/config/runtime-config.js';
+import { createRepairPolicy, DEFAULT_MAX_REPAIR_CYCLES, HARD_MAX_REPAIR_CYCLES } from '../dist/orchestration/repair-policy.js';
 
 const VALID_GITHUB_APP_ENV = {
   COMMANDER_GH_APP_ID: '123456',
@@ -103,5 +104,49 @@ test('loadRuntimeConfigFromEnv fails closed on a non-positive CI polling value',
   assert.throws(
     () => loadRuntimeConfigFromEnv(env),
     (error) => error instanceof Error && error.message.includes('COMMANDER_CI_MAX_ATTEMPTS'),
+  );
+});
+
+// --- Bounded repair policy (14: invalid repair-limit config -> fail closed) ---
+
+test('createRepairPolicy defaults to 2 and enforces a hard maximum of 3', () => {
+  assert.equal(DEFAULT_MAX_REPAIR_CYCLES, 2);
+  assert.equal(HARD_MAX_REPAIR_CYCLES, 3);
+  assert.equal(createRepairPolicy().maxRepairCycles, 2);
+  assert.equal(createRepairPolicy(0).maxRepairCycles, 0);
+  assert.equal(createRepairPolicy(3).maxRepairCycles, 3);
+});
+
+test('createRepairPolicy fails closed above the hard maximum', () => {
+  assert.throws(() => createRepairPolicy(4), /must be an integer between 0 and 3/);
+  assert.throws(() => createRepairPolicy(100), /must be an integer between 0 and 3/);
+});
+
+test('createRepairPolicy fails closed on negative or non-integer values -- never an unlimited loop', () => {
+  assert.throws(() => createRepairPolicy(-1), /must be an integer/);
+  assert.throws(() => createRepairPolicy(1.5), /must be an integer/);
+  assert.throws(() => createRepairPolicy(Infinity), /must be an integer/);
+  assert.throws(() => createRepairPolicy(Number.NaN), /must be an integer/);
+});
+
+test('loadRuntimeConfigFromEnv reads COMMANDER_MAX_REPAIR_CYCLES and defaults it to 2', () => {
+  assert.equal(loadRuntimeConfigFromEnv(baseEnv()).repairPolicy.maxRepairCycles, 2);
+  assert.equal(loadRuntimeConfigFromEnv(baseEnv({ COMMANDER_MAX_REPAIR_CYCLES: '0' })).repairPolicy.maxRepairCycles, 0);
+  assert.equal(loadRuntimeConfigFromEnv(baseEnv({ COMMANDER_MAX_REPAIR_CYCLES: '3' })).repairPolicy.maxRepairCycles, 3);
+});
+
+test('loadRuntimeConfigFromEnv fails closed when COMMANDER_MAX_REPAIR_CYCLES exceeds the hard maximum', () => {
+  const env = baseEnv({ COMMANDER_MAX_REPAIR_CYCLES: '4' });
+  assert.throws(
+    () => loadRuntimeConfigFromEnv(env),
+    (error) => error instanceof Error && error.message.includes('between 0 and 3'),
+  );
+});
+
+test('loadRuntimeConfigFromEnv fails closed when COMMANDER_MAX_REPAIR_CYCLES is not an integer', () => {
+  const env = baseEnv({ COMMANDER_MAX_REPAIR_CYCLES: 'unlimited' });
+  assert.throws(
+    () => loadRuntimeConfigFromEnv(env),
+    (error) => error instanceof Error && error.message.includes('COMMANDER_MAX_REPAIR_CYCLES must be an integer'),
   );
 });

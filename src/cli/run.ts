@@ -38,9 +38,14 @@ export interface CliRunResult {
   taskId?: string;
   target?: string;
   state?: OrchestrationState;
+  /** Total builder invocations actually executed (initial + repairs). Absent for a pre-flight ERROR. */
+  attempts?: number;
   verdict?: Verdict;
-  blocker?: string;
+  /** Concise reason the run stopped BLOCKED/ERROR -- never a raw log. */
+  lastFailure?: string;
   reasons?: string[];
+  /** The exact commit SHA the final decision/blocker applies to, when a publish happened. */
+  finalSha?: string;
   pullRequest?: { number: number; url: string; headSha: string; draft: boolean };
   githubAppValidation?: { satisfied: boolean; violations: string[] };
   auditEventCount?: number;
@@ -285,6 +290,7 @@ export async function runCli(
     publication: new PublicationOrchestrator(client),
     reviewer: new IndependentReviewerRunner(reviewerProvider, client),
     ci: runtimeConfig.ci,
+    repairPolicy: runtimeConfig.repairPolicy,
   });
 
   const result: CliRunResult = {
@@ -292,8 +298,10 @@ export async function runCli(
     taskId: task.id,
     target: task.targetRepository,
     state: run.state,
+    attempts: run.attempts,
     ...(run.decision ? { verdict: run.decision.verdict, reasons: run.decision.reasons } : {}),
-    ...(run.blocker ? { blocker: run.blocker } : {}),
+    ...(run.blocker ? { lastFailure: run.blocker } : {}),
+    ...(run.finalSha ? { finalSha: run.finalSha } : {}),
     ...(run.pullRequest
       ? {
           pullRequest: {

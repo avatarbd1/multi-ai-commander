@@ -5,6 +5,7 @@ import { join, resolve, sep } from 'node:path';
 import type { TaskContract, TestResult } from '../commander/types.js';
 import type { BuilderProvider } from '../providers/provider.js';
 import type { TargetLock } from '../orchestration/target-resolver.js';
+import type { RepairRequest } from '../orchestration/repair-request.js';
 
 export interface BuilderRequest {
   task: TaskContract;
@@ -12,6 +13,13 @@ export interface BuilderRequest {
   workspacePath: string;
   baseSha: string;
   branch: string;
+  /**
+   * Present only for a repair attempt (see RepairRequest.kind === 'repair'),
+   * absent for an initial build -- this is what makes the two request
+   * shapes explicitly distinguishable on the wire, without a second
+   * Builder execution path.
+   */
+  repair?: RepairRequest;
 }
 
 export interface BuilderResponse {
@@ -209,7 +217,12 @@ export class ManagedBuilderRunner {
     private readonly planner: VerificationPlanner = new NodePackageVerificationPlanner(),
   ) {}
 
-  public async run(task: TaskContract, target: TargetLock, baseSha: string): Promise<BuilderWorkProduct> {
+  public async run(
+    task: TaskContract,
+    target: TargetLock,
+    baseSha: string,
+    repair?: RepairRequest,
+  ): Promise<BuilderWorkProduct> {
     if (task.targetRepository.toLowerCase() !== target.repository.toLowerCase()) {
       throw new Error('TASK_TARGET_MISMATCH');
     }
@@ -221,6 +234,7 @@ export class ManagedBuilderRunner {
         workspacePath: prepared.path,
         baseSha,
         branch: prepared.branch,
+        ...(repair ? { repair } : {}),
       });
       if (captured.provider !== this.provider.name) throw new Error('BUILDER_PROVIDER_MISMATCH');
 

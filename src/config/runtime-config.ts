@@ -1,4 +1,5 @@
 import { loadConfigFromEnv, type EnvironmentConfig } from '../auth/setup.js';
+import { createRepairPolicy, type RepairPolicy } from '../orchestration/repair-policy.js';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -21,6 +22,7 @@ export interface RuntimeConfig {
   reviewer: ProviderCommandConfig;
   ci: CiPollingConfig;
   githubApp: EnvironmentConfig;
+  repairPolicy: RepairPolicy;
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -43,6 +45,16 @@ function parsePositiveInt(env: Record<string, string | undefined>, key: string, 
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${key} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseOptionalInt(env: Record<string, string | undefined>, key: string): number | undefined {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed)) {
+    throw new Error(`${key} must be an integer`);
   }
   return parsed;
 }
@@ -117,5 +129,7 @@ export function loadRuntimeConfigFromEnv(env: Record<string, string | undefined>
     intervalMs: parsePositiveInt(env, 'COMMANDER_CI_INTERVAL_MS', DEFAULT_CI_INTERVAL_MS),
   };
 
-  return { builder, reviewer, ci, githubApp };
+  const repairPolicy = createRepairPolicy(parseOptionalInt(env, 'COMMANDER_MAX_REPAIR_CYCLES'));
+
+  return { builder, reviewer, ci, githubApp, repairPolicy };
 }

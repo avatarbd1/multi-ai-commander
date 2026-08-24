@@ -58,7 +58,8 @@ async function callFreeModel(command: string): Promise<{ model?: string; text: s
   };
   const text = payload.choices?.[0]?.message?.content?.trim();
   if (!text) throw new Error("OPENROUTER_EMPTY_RESPONSE");
-  return { model: payload.model, text };
+
+  return payload.model ? { model: payload.model, text } : { text };
 }
 
 const server = http.createServer(async (req, res) => {

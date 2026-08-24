@@ -59,6 +59,26 @@ npm run build
 
 Node.js 22+ is required.
 
+## Testing
+
+Install dependencies first, then run the repository test suite:
+
+```bash
+npm install --no-audit --no-fund
+npm test
+```
+
+Before opening or merging a pull request, run the full local verification set:
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+A change should not pass the Commander gate solely because tests pass locally. CI evidence is commit-bound and fail-closed: missing, pending, failed, or SHA-mismatched CI evidence blocks a `PASS` verdict.
+
 ## GitHub integration
 
 Multi-AI Commander uses GitHub App credential broker authentication through environment variables:

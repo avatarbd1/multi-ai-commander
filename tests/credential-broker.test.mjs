@@ -28,7 +28,10 @@ test('GitHub App JWT uses RS256 and safe clock claims', async () => {
     fetchImpl: async (_url, init) => {
       const authorization = new Headers(init?.headers).get('Authorization');
       capturedJwt = authorization?.replace(/^Bearer /, '') ?? '';
-      return jsonResponse({ token: 'installation-token', expires_at: '2026-08-24T01:00:00Z' }, 201);
+      return jsonResponse(
+        { token: 'installation-token', expires_at: '2026-08-24T01:00:00Z', permissions: { contents: 'write' } },
+        201,
+      );
     },
   });
 
@@ -72,7 +75,10 @@ test('installation token expiry is parsed from expires_at and cache refreshes be
     fetchImpl: async () => {
       calls += 1;
       const expiresAt = new Date(nowMs + 5 * 60_000).toISOString();
-      return jsonResponse({ token: `token-${calls}`, expires_at: expiresAt }, 201);
+      return jsonResponse(
+        { token: `token-${calls}`, expires_at: expiresAt, permissions: { contents: 'write' } },
+        201,
+      );
     },
   });
 
@@ -96,7 +102,10 @@ test('concurrent refreshes use single-flight token exchange', async () => {
     fetchImpl: async () => {
       calls += 1;
       await gate;
-      return jsonResponse({ token: 'one-token', expires_at: '2026-08-24T01:00:00Z' }, 201);
+      return jsonResponse(
+        { token: 'one-token', expires_at: '2026-08-24T01:00:00Z', permissions: { contents: 'write' } },
+        201,
+      );
     },
   });
 
@@ -160,7 +169,14 @@ test('setup validation distinguishes local config from live installation verific
   const fetchImpl = async (url) => {
     calls += 1;
     if (String(url).includes('/access_tokens')) {
-      return jsonResponse({ token: 'live-token', expires_at: new Date(Date.now() + 60 * 60_000).toISOString() }, 201);
+      return jsonResponse(
+        {
+          token: 'live-token',
+          expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+          permissions: { contents: 'write' },
+        },
+        201,
+      );
     }
     return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
   };
@@ -184,6 +200,7 @@ test('broker-backed GitHub client refreshes token after authoritative expiry win
       return jsonResponse({
         token: `token-${tokenCalls}`,
         expires_at: new Date(nowMs + 3 * 60_000).toISOString(),
+        permissions: { contents: 'write' },
       }, 201);
     },
   });
@@ -193,7 +210,7 @@ test('broker-backed GitHub client refreshes token after authoritative expiry win
     seen.push(new Headers(init?.headers).get('Authorization'));
     return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
   };
-  const client = new GitHubRestClient(undefined, broker, 55, apiFetch);
+  const client = new GitHubRestClient({ broker, installationId: 55 }, apiFetch);
 
   await client.getRepository('avatarbd1/multi-ai-commander');
   nowMs += 2 * 60_000 + 1;
@@ -235,7 +252,7 @@ test('required GitHub read/write operations all use broker-backed authentication
     if (path.endsWith('/repos/avatarbd1/multi-ai-commander')) return jsonResponse({ full_name: 'avatarbd1/multi-ai-commander' });
     throw new Error(`Unhandled test request: ${path}`);
   };
-  const client = new GitHubRestClient(undefined, broker, 77, apiFetch);
+  const client = new GitHubRestClient({ broker, installationId: 77 }, apiFetch);
 
   await client.getRepository('avatarbd1/multi-ai-commander');
   await client.getCiEvidence('avatarbd1/multi-ai-commander', 'head');
@@ -258,4 +275,53 @@ test('required GitHub read/write operations all use broker-backed authentication
 
   assert(seen.length >= 10);
   assert(seen.every((request) => request.auth === 'Bearer broker-token'));
+});
+
+test('GitHub client constructor requires broker and installation ID — no static-token fallback', async () => {
+  const { GitHubRestClient } = await import('../dist/github/client.js');
+
+  try {
+    new GitHubRestClient({ broker: undefined, installationId: 42 });
+    assert.fail('Expected error when broker is undefined');
+  } catch (error) {
+    assert(error instanceof Error, 'Should throw error');
+  }
+
+  try {
+    new GitHubRestClient({ broker: {}, installationId: undefined });
+    assert.fail('Expected error when installationId is undefined');
+  } catch (error) {
+    assert(error instanceof Error, 'Should throw error');
+  }
+});
+
+test('GitHub client requires token from broker on every request — no cached static token', async () => {
+  const { GitHubRestClient } = await import('../dist/github/client.js');
+  let tokenRequests = 0;
+  const broker = {
+    async getInstallationToken() {
+      tokenRequests += 1;
+      return `token-${tokenRequests}`;
+    },
+  };
+  const apiFetch = async () => {
+    return new Response(JSON.stringify({ full_name: 'test/repo' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const client = new GitHubRestClient({ broker, installationId: 1 }, apiFetch);
+
+  await client.getRepository('test/repo');
+  assert.equal(tokenRequests, 1);
+  await client.getRepository('test/repo');
+  assert.equal(tokenRequests, 2);
+});
+
+test('managed execution runtime continues to accept broker-only GitHub client after auth refactor', async () => {
+  const { GitHubRestClient } = await import('../dist/github/client.js');
+
+  const broker = { async getInstallationToken() { return 'test-token'; } };
+  const client = new GitHubRestClient({ broker, installationId: 1 });
+  assert(client);
 });

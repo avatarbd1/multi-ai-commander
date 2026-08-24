@@ -1,7 +1,7 @@
 import type { GitHubCheckRun, PullRequestSnapshot } from './types.js';
 import { toCiEvidence } from './types.js';
 import type { CiEvidence } from '../commander/types.js';
-import type { CredentialBroker } from '../auth/types.js';
+import type { CredentialBroker, GitHubInstallationPermissions } from '../auth/types.js';
 
 function textToBase64(value: string): string {
   const bytes = new TextEncoder().encode(value);
@@ -64,6 +64,26 @@ interface GitHubRepositoryResponse {
   full_name: string;
 }
 
+/**
+ * Raw shape of GitHub's branch-protection REST response
+ * (`GET /repos/{owner}/{repo}/branches/{branch}/protection`). Fields are
+ * nested/snake_case exactly as GitHub returns them; callers must map this
+ * into the internal `BranchProtectionPolicy` domain type before evaluating
+ * it — see `mapGitHubBranchProtectionResponse` in
+ * `src/auth/branch-protection-policy.ts`.
+ */
+export interface GitHubBranchProtectionResponse {
+  required_status_checks?: { strict?: boolean; contexts?: string[] } | null;
+  required_pull_request_reviews?: {
+    dismiss_stale_reviews?: boolean;
+    require_code_owner_reviews?: boolean;
+    required_approving_review_count?: number;
+  } | null;
+  enforce_admins?: { enabled?: boolean } | null;
+  allow_force_pushes?: { enabled?: boolean } | null;
+  allow_deletions?: { enabled?: boolean } | null;
+}
+
 export interface PullRequestUpdate {
   title?: string;
   body?: string;
@@ -78,22 +98,34 @@ export class GitHubRequestError extends Error {
   }
 }
 
+export interface GitHubAppConfig {
+  broker: CredentialBroker;
+  installationId: number;
+}
+
 export class GitHubRestClient {
   private readonly baseUrl = 'https://api.github.com';
 
   public constructor(
-    private readonly token?: string,
-    private readonly broker?: CredentialBroker,
-    private readonly installationId?: number,
+    private readonly config: GitHubAppConfig,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
-
-  private async getToken(): Promise<string | undefined> {
-    if (this.broker) {
-      if (!this.installationId) throw new Error('GitHub App installation ID is required');
-      return this.broker.getInstallationToken(this.installationId);
+  ) {
+    if (!config.broker) throw new Error('GitHub App credential broker is required');
+    if (!Number.isSafeInteger(config.installationId) || config.installationId <= 0) {
+      throw new Error('GitHub App installation ID must be a positive integer');
     }
-    return this.token;
+  }
+
+  public get installationId(): number {
+    return this.config.installationId;
+  }
+
+  private async getToken(): Promise<string> {
+    return this.config.broker.getInstallationToken(this.config.installationId);
+  }
+
+  public async getInstallationPermissions(): Promise<GitHubInstallationPermissions> {
+    return this.config.broker.getInstallationPermissions(this.config.installationId);
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -149,6 +181,20 @@ export class GitHubRestClient {
       `/repos/${repository}/branches/${encodeURIComponent(branch)}`,
     );
     return result.commit.sha;
+  }
+
+  public async getBranchProtectionPolicy(
+    repository: string,
+    branch: string,
+  ): Promise<GitHubBranchProtectionResponse | null> {
+    try {
+      return await this.request<GitHubBranchProtectionResponse>(
+        `/repos/${repository}/branches/${encodeURIComponent(branch)}/protection`,
+      );
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   public async getPullRequest(repository: string, number: number): Promise<PullRequestSnapshot> {

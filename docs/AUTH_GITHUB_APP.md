@@ -112,6 +112,18 @@ Credential/configuration failures identify the variable or operation, not its ra
 
 Never add diagnostic commands that print stored tokens or private keys.
 
+## Branch protection and installation verification
+
+`verifyInstallationWithBranchProtection` (in `src/auth/setup.ts`) checks that the broker-backed installation can reach the target repository and that the target branch's protection policy satisfies `RECOMMENDED_REQUIREMENTS` in `src/auth/branch-protection-policy.ts` (strict status checks, required approvals, stale-review dismissal, admin enforcement, no force pushes, no deletions). `LiveInstallationVerifier` (`src/auth/live-installation.ts`) and `BranchProtectionVerifier.failClosed` both return `{ allowed: false, reason }` — never a default allow — when a check cannot be completed or a requirement is not met.
+
+## Credential rotation
+
+`CredentialRotationTracker` (`src/auth/secret-rotation.ts`) records credential state (`active`, `rotation_pending`, `rotated`, `revoked`, `expired`) and `createRotationPlan` produces the ordered rotation steps with approval gates described under **Private-key rotation** above. This is bookkeeping only — it does not perform rotation against GitHub.
+
+## Audit logging
+
+`AuditEventLogger` (`src/audit/event-logger.ts`) wraps `AuditChain` with typed monitoring events (`src/monitoring/event-types.ts`) for token refresh, installation/branch-protection verification, configuration validation, credential rotation, and fail-closed triggers. Event details are passed through a redaction pass (`github_pat_...` tokens, `*_secret` fields, `private_key` fields) before being hashed into the chain, so raw credential values are never persisted in the audit log.
+
 ## Human gate
 
 GitHub authentication grants transport capability only. It does not grant automatic merge or production-deploy authority. Commander verdicts remain human-gated, and production deployment is outside this credential-broker slice.

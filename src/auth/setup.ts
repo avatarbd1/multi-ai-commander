@@ -1,5 +1,7 @@
 import { GitHubAppCredentialBroker } from './credential-broker.js';
 import { GitHubRestClient } from '../github/client.js';
+import { AuditEventLogger } from '../audit/event-logger.js';
+import { LiveInstallationVerifier, DEFAULT_REQUIREMENTS } from './live-installation.js';
 import type { GitHubAuthValidationState } from './types.js';
 
 declare const process: {
@@ -45,10 +47,38 @@ export async function verifyLiveInstallation(
   const brokerOptions = options.fetchImpl ? { fetchImpl: options.fetchImpl } : {};
   const broker = new GitHubAppCredentialBroker(config.appId, config.privateKey, brokerOptions);
   await broker.validateConfiguration();
-  const client = new GitHubRestClient(undefined, broker, config.installationId, options.fetchImpl ?? fetch);
+  const client = new GitHubRestClient({ broker, installationId: config.installationId }, options.fetchImpl ?? fetch);
   const resolved = await client.getRepository(repository);
   if (resolved.fullName.toLowerCase() !== repository.toLowerCase()) throw new Error('GitHub repository access verification failed');
   return 'LIVE_INSTALLATION_VERIFIED';
+}
+
+export async function verifyInstallationWithBranchProtection(
+  config: EnvironmentConfig,
+  repository: string,
+  branch: string = 'main',
+  options: { fetchImpl?: typeof fetch; auditLogger?: AuditEventLogger } = {},
+): Promise<{ satisfied: boolean; violations: string[] }> {
+  const brokerOptions = options.fetchImpl ? { fetchImpl: options.fetchImpl } : {};
+  const broker = new GitHubAppCredentialBroker(config.appId, config.privateKey, brokerOptions);
+  await broker.validateConfiguration();
+  const client = new GitHubRestClient({ broker, installationId: config.installationId }, options.fetchImpl ?? fetch);
+
+  const result = await LiveInstallationVerifier.verify(client, repository, config.installationId, {
+    ...DEFAULT_REQUIREMENTS,
+    requiredBranch: branch,
+  });
+
+  if (options.auditLogger) {
+    await options.auditLogger.logBranchProtectionVerification(
+      repository,
+      branch,
+      result.satisfied,
+      result.violations.length > 0 ? result.violations : undefined,
+    );
+  }
+
+  return result;
 }
 
 async function main(): Promise<void> {

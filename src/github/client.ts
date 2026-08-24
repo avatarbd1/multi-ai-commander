@@ -13,6 +13,10 @@ function textToBase64(value: string): string {
   return btoa(binary);
 }
 
+function encodeRepositoryPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 interface GitHubPullResponse {
   number: number;
   title: string;
@@ -36,6 +40,11 @@ interface GitHubRefResponse {
   object: { sha: string };
 }
 
+interface GitHubBranchResponse {
+  name: string;
+  commit: { sha: string };
+}
+
 interface GitHubCommentResponse {
   id: number;
   html_url: string;
@@ -44,6 +53,11 @@ interface GitHubCommentResponse {
 interface GitHubContentWriteResponse {
   content: { sha: string } | null;
   commit: { sha: string };
+}
+
+interface GitHubContentResponse {
+  sha: string;
+  type: string;
 }
 
 interface GitHubRepositoryResponse {
@@ -55,6 +69,13 @@ export interface PullRequestUpdate {
   body?: string;
   state?: 'open' | 'closed';
   base?: string;
+}
+
+export class GitHubRequestError extends Error {
+  public constructor(public readonly status: number) {
+    super(`GitHub request failed (${status})`);
+    this.name = 'GitHubRequestError';
+  }
 }
 
 export class GitHubRestClient {
@@ -91,14 +112,43 @@ export class GitHubRestClient {
     } catch {
       throw new Error('GitHub request failed');
     }
-    if (!response.ok) throw new Error(`GitHub request failed (${response.status})`);
+    if (!response.ok) throw new GitHubRequestError(response.status);
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
+  }
+
+  private async requestText(path: string, accept: string): Promise<string> {
+    const accessToken = await this.getToken();
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        headers: {
+          Accept: accept,
+          'X-GitHub-Api-Version': '2022-11-28',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+      });
+    } catch {
+      throw new Error('GitHub request failed');
+    }
+    if (!response.ok) throw new GitHubRequestError(response.status);
+    const body = await response.text();
+    if (new TextEncoder().encode(body).byteLength > 2 * 1024 * 1024) {
+      throw new Error('PULL_REQUEST_DIFF_TOO_LARGE');
+    }
+    return body;
   }
 
   public async getRepository(repository: string): Promise<{ fullName: string }> {
     const repo = await this.request<GitHubRepositoryResponse>(`/repos/${repository}`);
     return { fullName: repo.full_name };
+  }
+
+  public async getBranchHead(repository: string, branch: string): Promise<string> {
+    const result = await this.request<GitHubBranchResponse>(
+      `/repos/${repository}/branches/${encodeURIComponent(branch)}`,
+    );
+    return result.commit.sha;
   }
 
   public async getPullRequest(repository: string, number: number): Promise<PullRequestSnapshot> {
@@ -118,6 +168,10 @@ export class GitHubRestClient {
     };
   }
 
+  public async getPullRequestDiff(repository: string, number: number): Promise<string> {
+    return this.requestText(`/repos/${repository}/pulls/${number}`, 'application/vnd.github.diff');
+  }
+
   public async getCiEvidence(repository: string, commitSha: string): Promise<CiEvidence> {
     const response = await this.request<GitHubChecksResponse>(`/repos/${repository}/commits/${commitSha}/check-runs?per_page=100`);
     return toCiEvidence(commitSha, response.check_runs);
@@ -130,6 +184,23 @@ export class GitHubRestClient {
       body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
     });
     return result.object.sha;
+  }
+
+  public async getFileMetadata(
+    repository: string,
+    path: string,
+    ref: string,
+  ): Promise<{ sha: string } | null> {
+    try {
+      const result = await this.request<GitHubContentResponse>(
+        `/repos/${repository}/contents/${encodeRepositoryPath(path)}?ref=${encodeURIComponent(ref)}`,
+      );
+      if (result.type !== 'file') throw new Error('GitHub content path is not a file');
+      return { sha: result.sha };
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   public async createOrUpdateFile(input: {
@@ -147,7 +218,7 @@ export class GitHubRestClient {
       ...(input.sha ? { sha: input.sha } : {}),
     };
     const result = await this.request<GitHubContentWriteResponse>(
-      `/repos/${input.repository}/contents/${input.path.split('/').map(encodeURIComponent).join('/')}`,
+      `/repos/${input.repository}/contents/${encodeRepositoryPath(input.path)}`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -158,6 +229,28 @@ export class GitHubRestClient {
       commitSha: result.commit.sha,
       ...(result.content?.sha ? { contentSha: result.content.sha } : {}),
     };
+  }
+
+  public async deleteFile(input: {
+    repository: string;
+    path: string;
+    message: string;
+    branch: string;
+    sha: string;
+  }): Promise<{ commitSha: string }> {
+    const result = await this.request<GitHubContentWriteResponse>(
+      `/repos/${input.repository}/contents/${encodeRepositoryPath(input.path)}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: input.message,
+          sha: input.sha,
+          branch: input.branch,
+        }),
+      },
+    );
+    return { commitSha: result.commit.sha };
   }
 
   public async createPullRequest(

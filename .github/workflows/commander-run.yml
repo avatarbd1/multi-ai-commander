@@ -11,10 +11,7 @@ on:
         required: true
         type: string
       target:
-        description: >-
-          Optional target repository alias. Leave on "(let planner infer)"
-          to let the planning stage read the target out of the command
-          itself.
+        description: Optional target repository alias.
         required: false
         type: choice
         default: '(let planner infer)'
@@ -30,6 +27,19 @@ permissions:
 jobs:
   commander-run:
     runs-on: ubuntu-latest
+    env:
+      COMMANDER_PLANNER_COMMAND: node
+      COMMANDER_PLANNER_NAME: openai-planner
+      COMMANDER_PLANNER_ARGS: '["scripts/providers/openai-planner.mjs"]'
+      COMMANDER_BUILDER_COMMAND: node
+      COMMANDER_BUILDER_NAME: claude
+      COMMANDER_BUILDER_ARGS: '["scripts/providers/claude-builder.mjs"]'
+      COMMANDER_REVIEWER_COMMAND: node
+      COMMANDER_REVIEWER_NAME: openai-reviewer
+      COMMANDER_REVIEWER_ARGS: '["scripts/providers/openai-reviewer.mjs"]'
+      COMMANDER_CI_MAX_ATTEMPTS: ${{ vars.COMMANDER_CI_MAX_ATTEMPTS }}
+      COMMANDER_CI_INTERVAL_MS: ${{ vars.COMMANDER_CI_INTERVAL_MS }}
+      COMMANDER_MAX_REPAIR_CYCLES: ${{ vars.COMMANDER_MAX_REPAIR_CYCLES }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,6 +52,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Claude Code runtime
+        run: npm install -g @anthropic-ai/claude-code@2.1.241
+
       - name: Build
         run: npm run build
 
@@ -51,28 +64,16 @@ jobs:
           COMMANDER_GH_INSTALLATION_ID: ${{ secrets.COMMANDER_GH_INSTALLATION_ID }}
           COMMANDER_GH_PRIVATE_KEY: ${{ secrets.COMMANDER_GH_PRIVATE_KEY }}
           COMMANDER_GH_VERIFY_REPOSITORY: ${{ vars.COMMANDER_GH_VERIFY_REPOSITORY }}
-          COMMANDER_PLANNER_COMMAND: ${{ vars.COMMANDER_PLANNER_COMMAND }}
-          COMMANDER_PLANNER_NAME: ${{ vars.COMMANDER_PLANNER_NAME }}
-          COMMANDER_PLANNER_ARGS: ${{ vars.COMMANDER_PLANNER_ARGS }}
-          COMMANDER_PLANNER_TIMEOUT_MS: ${{ vars.COMMANDER_PLANNER_TIMEOUT_MS }}
-          COMMANDER_PLANNER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_PLANNER_MAX_OUTPUT_BYTES }}
-          COMMANDER_BUILDER_COMMAND: ${{ vars.COMMANDER_BUILDER_COMMAND }}
-          COMMANDER_BUILDER_NAME: ${{ vars.COMMANDER_BUILDER_NAME }}
-          COMMANDER_BUILDER_ARGS: ${{ vars.COMMANDER_BUILDER_ARGS }}
-          COMMANDER_BUILDER_TIMEOUT_MS: ${{ vars.COMMANDER_BUILDER_TIMEOUT_MS }}
-          COMMANDER_BUILDER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_BUILDER_MAX_OUTPUT_BYTES }}
-          COMMANDER_REVIEWER_COMMAND: ${{ vars.COMMANDER_REVIEWER_COMMAND }}
-          COMMANDER_REVIEWER_NAME: ${{ vars.COMMANDER_REVIEWER_NAME }}
-          COMMANDER_REVIEWER_ARGS: ${{ vars.COMMANDER_REVIEWER_ARGS }}
-          COMMANDER_REVIEWER_TIMEOUT_MS: ${{ vars.COMMANDER_REVIEWER_TIMEOUT_MS }}
-          COMMANDER_REVIEWER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_REVIEWER_MAX_OUTPUT_BYTES }}
-          COMMANDER_CI_MAX_ATTEMPTS: ${{ vars.COMMANDER_CI_MAX_ATTEMPTS }}
-          COMMANDER_CI_INTERVAL_MS: ${{ vars.COMMANDER_CI_INTERVAL_MS }}
-          COMMANDER_MAX_REPAIR_CYCLES: ${{ vars.COMMANDER_MAX_REPAIR_CYCLES }}
+          COMMANDER_PLANNER_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          COMMANDER_BUILDER_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COMMANDER_REVIEWER_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -eu
+          test -n "$COMMANDER_PLANNER_OPENAI_API_KEY" || { echo "Missing repository secret: OPENAI_API_KEY" >&2; exit 1; }
+          test -n "$COMMANDER_BUILDER_ANTHROPIC_API_KEY" || { echo "Missing repository secret: ANTHROPIC_API_KEY" >&2; exit 1; }
           node dist/auth/setup.js
           node scripts/validate-runtime-config.mjs
+          claude --version >/dev/null
 
       - name: Convert command to a bounded TaskContract
         id: plan
@@ -82,15 +83,9 @@ jobs:
           COMMANDER_GH_APP_ID: ${{ secrets.COMMANDER_GH_APP_ID }}
           COMMANDER_GH_INSTALLATION_ID: ${{ secrets.COMMANDER_GH_INSTALLATION_ID }}
           COMMANDER_GH_PRIVATE_KEY: ${{ secrets.COMMANDER_GH_PRIVATE_KEY }}
-          COMMANDER_PLANNER_COMMAND: ${{ vars.COMMANDER_PLANNER_COMMAND }}
-          COMMANDER_PLANNER_NAME: ${{ vars.COMMANDER_PLANNER_NAME }}
-          COMMANDER_PLANNER_ARGS: ${{ vars.COMMANDER_PLANNER_ARGS }}
-          COMMANDER_PLANNER_TIMEOUT_MS: ${{ vars.COMMANDER_PLANNER_TIMEOUT_MS }}
-          COMMANDER_PLANNER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_PLANNER_MAX_OUTPUT_BYTES }}
-          COMMANDER_BUILDER_COMMAND: ${{ vars.COMMANDER_BUILDER_COMMAND }}
-          COMMANDER_BUILDER_NAME: ${{ vars.COMMANDER_BUILDER_NAME }}
-          COMMANDER_REVIEWER_COMMAND: ${{ vars.COMMANDER_REVIEWER_COMMAND }}
-          COMMANDER_REVIEWER_NAME: ${{ vars.COMMANDER_REVIEWER_NAME }}
+          COMMANDER_PLANNER_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          COMMANDER_BUILDER_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COMMANDER_REVIEWER_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/commander"
@@ -98,7 +93,6 @@ jobs:
           PLAN_RESULT_PATH="$RUNNER_TEMP/commander/plan-result.json"
           echo "task_path=$TASK_PATH" >> "$GITHUB_OUTPUT"
           echo "plan_result_path=$PLAN_RESULT_PATH" >> "$GITHUB_OUTPUT"
-
           set +e
           if [ "$COMMANDER_TARGET_INPUT" = "(let planner infer)" ] || [ -z "$COMMANDER_TARGET_INPUT" ]; then
             node dist/cli/main.js plan --command "$COMMANDER_COMMAND_INPUT" --out "$TASK_PATH" > "$PLAN_RESULT_PATH"
@@ -107,7 +101,6 @@ jobs:
           fi
           PLAN_EXIT_CODE=$?
           set -e
-
           cat "$PLAN_RESULT_PATH"
           echo "exit_code=$PLAN_EXIT_CODE" >> "$GITHUB_OUTPUT"
 
@@ -124,19 +117,9 @@ jobs:
           COMMANDER_GH_APP_ID: ${{ secrets.COMMANDER_GH_APP_ID }}
           COMMANDER_GH_INSTALLATION_ID: ${{ secrets.COMMANDER_GH_INSTALLATION_ID }}
           COMMANDER_GH_PRIVATE_KEY: ${{ secrets.COMMANDER_GH_PRIVATE_KEY }}
-          COMMANDER_BUILDER_COMMAND: ${{ vars.COMMANDER_BUILDER_COMMAND }}
-          COMMANDER_BUILDER_NAME: ${{ vars.COMMANDER_BUILDER_NAME }}
-          COMMANDER_BUILDER_ARGS: ${{ vars.COMMANDER_BUILDER_ARGS }}
-          COMMANDER_BUILDER_TIMEOUT_MS: ${{ vars.COMMANDER_BUILDER_TIMEOUT_MS }}
-          COMMANDER_BUILDER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_BUILDER_MAX_OUTPUT_BYTES }}
-          COMMANDER_REVIEWER_COMMAND: ${{ vars.COMMANDER_REVIEWER_COMMAND }}
-          COMMANDER_REVIEWER_NAME: ${{ vars.COMMANDER_REVIEWER_NAME }}
-          COMMANDER_REVIEWER_ARGS: ${{ vars.COMMANDER_REVIEWER_ARGS }}
-          COMMANDER_REVIEWER_TIMEOUT_MS: ${{ vars.COMMANDER_REVIEWER_TIMEOUT_MS }}
-          COMMANDER_REVIEWER_MAX_OUTPUT_BYTES: ${{ vars.COMMANDER_REVIEWER_MAX_OUTPUT_BYTES }}
-          COMMANDER_CI_MAX_ATTEMPTS: ${{ vars.COMMANDER_CI_MAX_ATTEMPTS }}
-          COMMANDER_CI_INTERVAL_MS: ${{ vars.COMMANDER_CI_INTERVAL_MS }}
-          COMMANDER_MAX_REPAIR_CYCLES: ${{ vars.COMMANDER_MAX_REPAIR_CYCLES }}
+          COMMANDER_PLANNER_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          COMMANDER_BUILDER_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COMMANDER_REVIEWER_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TASK_PATH: ${{ steps.plan.outputs.task_path }}
         run: |
           set +e
@@ -144,7 +127,6 @@ jobs:
           node dist/cli/main.js run --task "$TASK_PATH" > "$RUN_RESULT_PATH"
           RUN_EXIT_CODE=$?
           set -e
-
           cat "$RUN_RESULT_PATH"
           echo "run_result_path=$RUN_RESULT_PATH" >> "$GITHUB_OUTPUT"
           echo "exit_code=$RUN_EXIT_CODE" >> "$GITHUB_OUTPUT"

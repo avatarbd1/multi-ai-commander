@@ -7,21 +7,21 @@ export type OrchestrationState =
   | 'PUBLISH'
   | 'CI'
   | 'REVIEW'
-  | 'VERDICT'
-  | 'HUMAN_GATE'
+  | 'COMPLETE'
+  | 'ERROR'
   | 'BLOCKED';
 
 const FORWARD_TRANSITIONS: Readonly<Record<OrchestrationState, readonly OrchestrationState[]>> = {
-  TASK: ['TARGET_LOCK', 'BLOCKED'],
-  TARGET_LOCK: ['TARGET_ACCESS_VERIFY', 'BLOCKED'],
-  TARGET_ACCESS_VERIFY: ['BUILD', 'BLOCKED'],
-  BUILD: ['VERIFY', 'BLOCKED'],
-  VERIFY: ['PUBLISH', 'BLOCKED'],
-  PUBLISH: ['CI', 'BLOCKED'],
-  CI: ['REVIEW', 'BLOCKED'],
-  REVIEW: ['VERDICT', 'BLOCKED'],
-  VERDICT: ['HUMAN_GATE', 'BLOCKED'],
-  HUMAN_GATE: [],
+  TASK: ['TARGET_LOCK', 'BLOCKED', 'ERROR'],
+  TARGET_LOCK: ['TARGET_ACCESS_VERIFY', 'ERROR'],
+  TARGET_ACCESS_VERIFY: ['BUILD', 'ERROR'],
+  BUILD: ['VERIFY', 'ERROR'],
+  VERIFY: ['PUBLISH', 'ERROR'],
+  PUBLISH: ['CI', 'ERROR'],
+  CI: ['REVIEW', 'ERROR'],
+  REVIEW: ['COMPLETE', 'BLOCKED', 'ERROR'],
+  COMPLETE: [],
+  ERROR: [],
   BLOCKED: [],
 };
 
@@ -43,5 +43,5 @@ export function transitionOrchestrationState(
 }
 
 export function isTerminalOrchestrationState(state: OrchestrationState): boolean {
-  return state === 'HUMAN_GATE' || state === 'BLOCKED';
+  return state === 'COMPLETE' || state === 'ERROR' || state === 'BLOCKED';
 }

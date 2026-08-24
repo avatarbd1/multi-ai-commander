@@ -37,6 +37,7 @@ reviewer identities collide.
 | `COMMANDER_REVIEWER_ARGS` / `_TIMEOUT_MS` / `_MAX_OUTPUT_BYTES` | no | same as builder | Reviewer command tuning |
 | `COMMANDER_CI_MAX_ATTEMPTS` | no | `30` | commit-bound CI poll attempts |
 | `COMMANDER_CI_INTERVAL_MS` | no | `10000` | commit-bound CI poll interval (ms) |
+| `COMMANDER_MAX_REPAIR_CYCLES` | no | `2` | bounded repair attempts (hard maximum: `3`) |
 
 ## The `commander run` command
 
@@ -56,16 +57,47 @@ In order, it: validates the task file and resolves its target (a supported alias
 (fails closed on anything missing); instantiates the one canonical broker-backed
 `GitHubRestClient`; runs a live GitHub App installation/permission check against the task's
 target (fails closed); instantiates the Builder and Reviewer provider adapters; and hands
-off to `runManagedCommander()` -- the existing
-`TASK -> TARGET_LOCK -> TARGET_ACCESS_VERIFY -> BUILD -> VERIFY -> PUBLISH -> CI -> REVIEW -> VERDICT -> HUMAN_GATE`
-pipeline. No step here re-implements any part of that pipeline.
+off to `runManagedCommander()`:
 
-It prints one JSON object describing the outcome and sets a process exit code:
+```text
+commander run --task task.json
+   |
+   v
+Builder --------------------------------> Draft PR --> exact-SHA CI --> Reviewer
+   ^                                                                       |
+   |                                                                       v
+   |                                                              PASS ------ NEEDS_FIX
+   |                                                                            |
+   +----------------- automatic bounded repair (<= COMMANDER_MAX_REPAIR_CYCLES) +
+                                                                             |
+                                                                             v
+                                                              CI + Reviewer again -> ... -> HUMAN_GATE
+```
 
-- `0` -- the run reached `HUMAN_GATE` (verdict was `PASS`). Nothing merges or deploys
-  automatically; that remains a separate human action.
-- `1` -- the run legitimately stopped `BLOCKED` at some stage (build/verification failure,
-  CI failure, incomplete review coverage, `NEEDS_FIX`/`BLOCKED` verdict, ...).
+A repairable failure (local verification, CI, or a `NEEDS_FIX` verdict -- see
+[`PHASE2_MANAGED_EXECUTION.md`](PHASE2_MANAGED_EXECUTION.md#bounded-self-correcting-repair-loop)
+for the full retry policy, non-retryable blockers, exact-SHA freshness rules, and no-progress
+termination) is retried automatically, bounded by `COMMANDER_MAX_REPAIR_CYCLES`, updating the
+same Draft PR each time. `HUMAN_GATE` is reached only after a final deterministic `PASS`,
+whether that is the first attempt or a later repair; no step here re-implements any part of
+the pipeline or bypasses the independent Reviewer or the human gate.
+
+It prints one JSON object describing the outcome:
+
+```text
+status:       HUMAN_GATE | BLOCKED | ERROR
+attempts:     <builder invocations actually run, including repairs>
+finalSha:     <exact commit SHA the decision applies to, when a publish happened>
+pullRequest:  <number/url, when a publish happened>
+lastFailure:  <concise reason, when BLOCKED/ERROR -- never a raw log>
+```
+
+and sets a process exit code:
+
+- `0` -- the run reached `HUMAN_GATE` (a final verdict of `PASS`, possibly after one or more
+  repairs). Nothing merges or deploys automatically; that remains a separate human action.
+- `1` -- the run legitimately stopped `BLOCKED` (a non-retryable failure, the repair limit was
+  reached, or no-progress was detected).
 - `2` -- a pre-flight failure: bad CLI arguments, an invalid task file, missing runtime
   configuration, or a failed GitHub App validation.
 
@@ -120,7 +152,8 @@ Builder/Reviewer commands, `commander run` genuinely opens a Draft PR against
 
 ## What this slice does not add
 
-- No automatic fix-and-retry loop.
+- No *unlimited* fix-and-retry loop -- repair is bounded by `COMMANDER_MAX_REPAIR_CYCLES`
+  (default 2, hard maximum 3) and stops closed on any non-retryable or no-progress condition.
 - No auto-merge, no auto-deploy.
 - No second GitHub client/auth engine -- `commander run` uses the same broker-backed
   `GitHubRestClient` and `createGitHubAppClient` as every other Commander entrypoint.

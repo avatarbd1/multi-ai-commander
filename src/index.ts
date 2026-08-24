@@ -25,4 +25,7 @@ export * from './orchestration/state-machine.js';
 export * from './orchestration/live-target-access.js';
 export * from './orchestration/prepare-target.js';
 export * from './orchestration/run-managed.js';
+export * from './orchestration/repair-policy.js';
+export * from './orchestration/repair-request.js';
+export * from './orchestration/repair-progress.js';
 export * from './config/runtime-config.js';
